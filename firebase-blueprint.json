@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "test_logs": {
+      "title": "Test Log",
+      "description": "Optical fiber defect and loss live test records",
+      "properties": {
+        "timestamp": { "type": "string" },
+        "cableId": { "type": "string" },
+        "fiberIndex": { "type": "number" },
+        "lossDb": { "type": "number" },
+        "status": { "type": "string" },
+        "distanceMeters": { "type": "number" },
+        "wavelengthNm": { "type": "number" }
+      },
+      "required": ["timestamp", "cableId"]
+    },
+    "settings": {
+      "title": "System Settings",
+      "description": "Optical calibration and threshold settings",
+      "properties": {
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["updatedAt"]
+    }
+  }
+}
