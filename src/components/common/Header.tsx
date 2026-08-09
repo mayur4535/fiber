@@ -22,13 +22,15 @@ interface HeaderProps {
   userRole: AppUserRole;
   onRoleChange: (role: AppUserRole) => void;
   onOpenTerminal: () => void;
+  onOpenHardwareModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   activeModel,
   userRole,
   onRoleChange,
-  onOpenTerminal
+  onOpenTerminal,
+  onOpenHardwareModal
 }) => {
   const [espStatus, setEspStatus] = useState<ESP32Status>(esp32Service.getStatus());
   const [timeStr, setTimeStr] = useState<string>('');
@@ -76,24 +78,24 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-2 text-xs">
         {/* ESP Connection Status */}
         <div 
-          onClick={onOpenTerminal}
-          className={`flex items-center gap-1.5 px-2 py-1 rounded border cursor-pointer transition-all ${
+          onClick={onOpenHardwareModal || onOpenTerminal}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border cursor-pointer transition-all shadow ${
             espStatus.connected 
-              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300 hover:border-emerald-400' 
-              : 'bg-gray-800 border-gray-700 text-gray-400'
+              ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 hover:border-emerald-400 hover:bg-emerald-900/80' 
+              : 'bg-red-950/70 border-red-500/60 text-red-200 hover:bg-red-900/80 hover:border-red-400 animate-pulse'
           }`}
-          title="Click to open ESP32 Terminal"
+          title="Click to open Physical ESP32 Hardware Live Connection Window"
         >
-          <Cpu className={`w-4 h-4 ${espStatus.isCapturing ? 'animate-spin text-orange-400' : ''}`} />
+          <Cpu className={`w-4 h-4 ${espStatus.isCapturing ? 'animate-spin text-orange-400' : espStatus.connected ? 'text-emerald-400' : 'text-red-400'}`} />
           <div className="flex flex-col">
             <span className="font-semibold text-[11px] leading-tight">
               {espStatus.connected ? espStatus.deviceName : 'ESP32 Disconnected'}
             </span>
-            <span className="text-[9px] text-gray-400 leading-tight">
+            <span className="text-[9px] text-slate-300 leading-tight">
               {espStatus.connected ? `${espStatus.connectionType} (${espStatus.portName})` : 'Click to connect'}
             </span>
           </div>
-          <span className={`w-2 h-2 rounded-full ${espStatus.connected ? 'bg-emerald-400 animate-ping' : 'bg-gray-500'}`} />
+          <span className={`w-2 h-2 rounded-full ${espStatus.connected ? 'bg-emerald-400 animate-ping' : 'bg-red-500 animate-ping'}`} />
         </div>
 
         {/* Device Temp */}

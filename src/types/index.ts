@@ -199,6 +199,7 @@ export interface AppSettings {
   baudRate: number;
   toleranceDefaultPercent: number;
   demoMode: boolean;
+  storageMode?: 'firebase' | 'local';
 }
 
 export interface SystemLog {

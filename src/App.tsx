@@ -10,6 +10,7 @@ import { DashboardModule } from './components/dashboard/DashboardModule';
 import { ModelManagerModule } from './components/models/ModelManagerModule';
 import { ReferenceReadingModule } from './components/reference/ReferenceReadingModule';
 import { LiveTestModule } from './components/livetest/LiveTestModule';
+import { PendingTestsModule } from './components/pending/PendingTestsModule';
 import { DiagnosisModule } from './components/diagnosis/DiagnosisModule';
 import { HistoryReportsModule } from './components/history/HistoryReportsModule';
 import { AnalyticsModule } from './components/analytics/AnalyticsModule';
@@ -41,6 +42,7 @@ export default function App() {
   
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(true);
   const [espStatus, setEspStatus] = useState<ESP32Status>(esp32Service.getStatus());
+  const [showHardwareModal, setShowHardwareModal] = useState<boolean>(false);
 
   // Initialization
   useEffect(() => {
@@ -90,11 +92,17 @@ export default function App() {
         userRole={userRole}
         onRoleChange={handleRoleChange}
         onOpenTerminal={() => setActiveModule('terminal')}
+        onOpenHardwareModal={() => {
+          setShowHardwareModal(true);
+          if (activeModule !== 'livetest') {
+            setActiveModule('livetest');
+          }
+        }}
       />
 
       {/* Main Body Shell */}
-      <div className="flex flex-1 overflow-hidden h-[calc(100vh-50px)]">
-        {/* Left Navigation Drawer */}
+      <div className="flex flex-col flex-1 overflow-hidden h-[calc(100vh-50px)]">
+        {/* Top Navigation Bar with Dropdown Menu */}
         <NavigationDrawer
           activeModule={activeModule}
           onSelectModule={(mod) => setActiveModule(mod)}
@@ -130,6 +138,23 @@ export default function App() {
                 setCurrentReport(report);
                 setReports(localDB.getReports());
                 setActiveModule('diagnosis');
+              }}
+              showHardwareModal={showHardwareModal}
+              setShowHardwareModal={setShowHardwareModal}
+            />
+          )}
+
+          {activeModule === 'pending' && (
+            <PendingTestsModule
+              models={models}
+              onResumePendingTest={(session) => {
+                const targetModel = models.find(m => m.id === session.modelId) || activeModel;
+                if (targetModel) setActiveModel(targetModel);
+                setActiveModule('livetest');
+              }}
+              onNavigateToHistory={() => {
+                setReports(localDB.getReports());
+                setActiveModule('history');
               }}
             />
           )}

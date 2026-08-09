@@ -34,7 +34,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   comPort: 'COM3 (ESP32 USB Serial)',
   baudRate: 115200,
   toleranceDefaultPercent: 2.0,
-  demoMode: true
+  demoMode: true,
+  storageMode: 'firebase'
 };
 
 const DEFAULT_CALIBRATION: CalibrationData = {
@@ -133,21 +134,26 @@ class LocalDBService {
       localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
       this.log('INFO', 'Report Saved', `Saved diagnostic report ${report.id}`);
 
-      // Sync test report to Firebase Cloud Firestore
-      saveTestLogToCloud({
-        timestamp: report.timestamp,
-        cableId: report.machineId || report.serialNumber || 'Fiber-Source-Cable',
-        fiberIndex: 1,
-        lossDb: report.healthScore,
-        status: report.overallStatus,
-        operator: report.engineerName,
-        notes: JSON.stringify({
-          brand: report.brand,
-          modelName: report.modelName,
-          primaryFaultLocation: report.primaryFaultLocation,
-          evidenceSummary: report.evidenceSummary
-        })
-      }).catch((err) => console.warn('Cloud sync error for report:', err));
+      const currentSettings = this.getSettings();
+      // Sync test report to Firebase Cloud Firestore only if storageMode is not 'local'
+      if (currentSettings.storageMode !== 'local') {
+        saveTestLogToCloud({
+          timestamp: report.timestamp,
+          cableId: report.machineId || report.serialNumber || 'Fiber-Source-Cable',
+          fiberIndex: 1,
+          lossDb: report.healthScore,
+          status: report.overallStatus,
+          operator: report.engineerName,
+          notes: JSON.stringify({
+            brand: report.brand,
+            modelName: report.modelName,
+            primaryFaultLocation: report.primaryFaultLocation,
+            evidenceSummary: report.evidenceSummary
+          })
+        }).catch((err) => console.warn('Cloud sync error for report:', err));
+      } else {
+        console.log('Local storage mode active: saved to PC/Laptop disk storage only.');
+      }
     } catch (e) {
       console.error('Failed to save report:', e);
     }
@@ -159,27 +165,60 @@ class LocalDBService {
   }
 
   // --- PENDING TEST (AUTO-SAVE & RECOVERY) ---
-  public getPendingTest(): PendingTestSession | null {
+  public getPendingTests(): PendingTestSession[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PENDING_TEST);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object') return [parsed];
+      }
     } catch (e) {
-      console.error('Failed to load pending test:', e);
+      console.error('Failed to load pending tests list:', e);
     }
-    return null;
+    return [];
+  }
+
+  public getPendingTest(id?: string): PendingTestSession | null {
+    const list = this.getPendingTests();
+    if (list.length === 0) return null;
+    if (id) {
+      return list.find(s => s.id === id) || null;
+    }
+    return list[0];
   }
 
   public savePendingTest(session: PendingTestSession): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(session));
+      const list = this.getPendingTests();
+      const idx = list.findIndex(s => s.id === session.id || s.serialNumber === session.serialNumber);
+      if (idx >= 0) {
+        list[idx] = session;
+      } else {
+        list.unshift(session);
+      }
+      localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(list));
     } catch (e) {
       console.error('Failed to save pending test:', e);
     }
   }
 
-  public clearPendingTest(): void {
+  public deletePendingTest(id: string): void {
     try {
-      localStorage.removeItem(STORAGE_KEYS.PENDING_TEST);
+      const list = this.getPendingTests().filter(s => s.id !== id && s.serialNumber !== id);
+      localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(list));
+    } catch (e) {
+      console.error('Failed to delete pending test:', e);
+    }
+  }
+
+  public clearPendingTest(id?: string): void {
+    try {
+      if (id) {
+        this.deletePendingTest(id);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.PENDING_TEST);
+      }
     } catch (e) {
       console.error('Failed to clear pending test:', e);
     }
@@ -199,7 +238,9 @@ class LocalDBService {
   public saveSettings(settings: AppSettings): void {
     try {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-      saveSettingsToCloud(settings).catch((err) => console.warn('Cloud sync error for settings:', err));
+      if (settings.storageMode !== 'local') {
+        saveSettingsToCloud(settings).catch((err) => console.warn('Cloud sync error for settings:', err));
+      }
     } catch (e) {
       console.error('Failed to save settings:', e);
     }

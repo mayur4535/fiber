@@ -23,7 +23,10 @@ import {
   Radio,
   RefreshCw,
   Terminal,
-  Activity
+  Activity,
+  Cloud,
+  Laptop,
+  ChevronDown
 } from 'lucide-react';
 import { AppSettings, CalibrationData, AppUserRole, FiberModel } from '../../types';
 import { localDB } from '../../services/db';
@@ -149,65 +152,133 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-4">
-      {/* Top Banner Toolbar */}
-      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-4 shadow-md flex justify-between items-center">
-        <div>
-          <h2 className="text-base font-bold text-white uppercase flex items-center gap-2">
-            <Settings className="w-5 h-5 text-orange-400" />
-            SYSTEM SETTINGS & MODEL CONFIGURATION
-          </h2>
-          <p className="text-xs text-gray-400">
-            MASTER LOCK V4: Manage System, Firmware, Calibration, Models, & Reference Databases
-          </p>
+      {/* DROPDOWN NAVIGATION BAR & SAVE CONFIGURATION BUTTON */}
+      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-3 shadow-md flex flex-wrap items-center justify-between gap-3">
+        {/* Dropdown Selector for Settings Category */}
+        <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+          <label className="text-xs font-extrabold text-orange-400 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+            <Settings className="w-4 h-4 text-orange-400" />
+            <span>Settings Section:</span>
+          </label>
+          <div className="relative flex-1 max-w-md">
+            <select
+              value={activeTab}
+              onChange={(e) => setActiveTab(e.target.value as SettingsSubTab)}
+              className="w-full bg-[#111827] border border-orange-500/80 text-orange-200 font-bold font-mono text-xs sm:text-sm rounded-lg px-3 py-2 pr-8 outline-none focus:ring-2 focus:ring-orange-400 cursor-pointer shadow appearance-none"
+            >
+              {navTabs.map((tab) => (
+                <option key={tab.id} value={tab.id} className="bg-gray-900 text-white font-mono py-1">
+                  {tab.label} {tab.badge ? `(${tab.badge})` : ''}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-4 h-4 text-orange-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
         </div>
 
+        {/* Save Configuration Button */}
         <button
           onClick={handleSaveSettings}
-          className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs rounded-lg flex items-center gap-2 shadow-md transition-colors"
+          className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs rounded-lg flex items-center gap-2 shadow-md transition-all active:scale-95 cursor-pointer shrink-0"
         >
           <Save className="w-4 h-4" />
           <span>Save Configuration</span>
         </button>
       </div>
 
-      {/* SUB TABS NAVIGATION BAR */}
-      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-2 flex flex-wrap gap-2 shadow-md">
-        {navTabs.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-3.5 py-2 rounded-lg text-xs font-bold font-mono flex items-center gap-2 transition-all ${
-                isActive
-                  ? 'bg-orange-600 text-white border border-orange-400 shadow-md'
-                  : 'bg-gray-900/80 text-gray-400 hover:bg-gray-800 hover:text-white border border-gray-800'
-              }`}
-            >
-              <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-gray-400'}`} />
-              <span>{tab.label}</span>
-              {tab.badge && (
-                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono uppercase ${
-                  isActive ? 'bg-orange-800 text-orange-200' : 'bg-orange-950 text-orange-400 border border-orange-800'
-                }`}>
-                  {tab.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
       {/* TAB CONTENT REGIONS */}
 
       {/* 1. GENERAL TAB */}
       {activeTab === 'general' && (
-        <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-4 space-y-3 shadow-xl text-xs">
+        <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-4 space-y-5 shadow-xl text-xs">
           <h3 className="text-xs font-bold text-gray-300 uppercase tracking-wider flex items-center gap-2 border-b border-gray-700 pb-2">
             <UserCheck className="w-4 h-4 text-orange-400" />
             GENERAL & OPERATOR PREFERENCES
           </h3>
+
+          {/* DATA STORAGE MODE SELECTION (FIREBASE CLOUD VS LAPTOP LOCAL EXE STORAGE) */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 space-y-3">
+            <div className="flex justify-between items-center">
+              <div>
+                <label className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                  <Database className="w-4 h-4 text-amber-400" />
+                  DATA STORAGE TARGET (ડેટા ક્યાં સેવ કરવો)
+                </label>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Select where test logs, models, and diagnostic reports will be saved:
+                </p>
+              </div>
+              <span className={`text-[10px] font-bold px-2.5 py-1 rounded uppercase font-mono border ${
+                (localSettings.storageMode || 'firebase') === 'firebase'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+              }`}>
+                {(localSettings.storageMode || 'firebase') === 'firebase' ? 'ONLINE CLOUD ACTIVE' : 'LAPTOP OFFLINE EXE MODE'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+              {/* Option 1: Firebase Cloud */}
+              <div
+                onClick={() => setLocalSettings({ ...localSettings, storageMode: 'firebase' })}
+                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
+                  (localSettings.storageMode || 'firebase') === 'firebase'
+                    ? 'bg-amber-950/40 border-amber-500 text-white shadow-lg ring-1 ring-amber-500/50'
+                    : 'bg-gray-950/80 border-gray-800 text-gray-400 hover:border-gray-700'
+                }`}
+              >
+                <div className={`p-2.5 rounded-lg ${
+                  (localSettings.storageMode || 'firebase') === 'firebase' ? 'bg-amber-500 text-black' : 'bg-gray-800 text-gray-400'
+                }`}>
+                  <Cloud className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-xs text-white">1. Firebase Cloud Database</span>
+                    {(localSettings.storageMode || 'firebase') === 'firebase' && (
+                      <CheckCircle2 className="w-4 h-4 text-amber-400" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-300 leading-snug">
+                    Sync test logs & reports online to Firebase Firestore Cloud.
+                  </p>
+                  <p className="text-[10px] text-amber-400/90 font-mono">
+                    • Online Sync • Multi-Device • Cloud Backup
+                  </p>
+                </div>
+              </div>
+
+              {/* Option 2: Laptop Local Storage */}
+              <div
+                onClick={() => setLocalSettings({ ...localSettings, storageMode: 'local' })}
+                className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
+                  localSettings.storageMode === 'local'
+                    ? 'bg-emerald-950/40 border-emerald-500 text-white shadow-lg ring-1 ring-emerald-500/50'
+                    : 'bg-gray-950/80 border-gray-800 text-gray-400 hover:border-gray-700'
+                }`}
+              >
+                <div className={`p-2.5 rounded-lg ${
+                  localSettings.storageMode === 'local' ? 'bg-emerald-500 text-black' : 'bg-gray-800 text-gray-400'
+                }`}>
+                  <Laptop className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-xs text-white">2. Laptop Local Storage (EXE / Node.js)</span>
+                    {localSettings.storageMode === 'local' && (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-300 leading-snug">
+                    Save data locally on Laptop disk (LocalStorage / Offline JSON DB).
+                  </p>
+                  <p className="text-[10px] text-emerald-400/90 font-mono">
+                    • Standalone EXE Mode • 100% Offline • Private Laptop Storage
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>

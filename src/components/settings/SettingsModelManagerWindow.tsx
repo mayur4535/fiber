@@ -793,111 +793,93 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
   return (
     <div className="bg-[#111827] text-gray-100 p-4 space-y-4 font-sans max-w-[1600px] mx-auto min-h-screen select-none">
       
-      {/* 3-COLUMN UNIFIED DESKTOP WINDOW CONTAINER */}
-      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-4 shadow-2xl grid grid-cols-1 lg:grid-cols-12 gap-4">
-        
-        {/* ========================================================================= */}
-        {/* COLUMN 1: AVAILABLE MODELS (Left ~25% - Col Span 3) */}
-        {/* ========================================================================= */}
-        <div className="lg:col-span-3 flex flex-col justify-between bg-[#111827] border border-gray-700 rounded-lg p-3 space-y-3">
-          <div>
-            <h3 className="text-sm font-bold text-gray-200 mb-2 uppercase tracking-wide flex items-center justify-between border-b border-gray-700 pb-1.5">
-              <span>Available Models</span>
-              <span className="text-[10px] font-mono text-amber-400 bg-amber-900/40 px-1.5 py-0.5 rounded border border-amber-700">
-                {models.length} Loaded
-              </span>
-            </h3>
-
-            {/* MODEL LIST BOX */}
-            <div className="bg-[#1E293B] border border-gray-600 rounded p-1.5 h-[340px] overflow-y-auto space-y-1 font-mono text-xs">
-              {models.map((m) => {
-                const isSelected = m.id === selectedModelId;
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => {
-                      setSelectedModelId(m.id);
-                      onSelectModel(m);
-                    }}
-                    className={`p-2 rounded cursor-pointer transition-colors flex items-center justify-between ${
-                      isSelected
-                        ? 'bg-amber-500/20 text-amber-300 font-bold border border-amber-500 shadow-sm'
-                        : 'text-gray-300 hover:bg-gray-700/60'
-                    }`}
-                  >
-                    <div className="truncate">
-                      <span className="text-gray-400 text-[10px] uppercase mr-1">[{m.brand}]</span>
-                      <span>{m.modelName}</span>
-                    </div>
-                    {isSelected && <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />}
-                  </div>
-                );
-              })}
-            </div>
+      {/* TOP MODEL SELECTOR BAR WITH DROPDOWN MENU */}
+      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-3 shadow-xl flex flex-wrap items-center justify-between gap-3">
+        {/* Dropdown Menu for Model Selection */}
+        <div className="flex items-center gap-3 flex-1 min-w-[280px]">
+          <label className="text-xs font-extrabold text-amber-400 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+            <Layers className="w-4 h-4 text-amber-400" />
+            <span>Select Laser Model:</span>
+          </label>
+          <div className="relative flex-1 max-w-md">
+            <select
+              value={selectedModelId}
+              onChange={(e) => {
+                setSelectedModelId(e.target.value);
+                const found = models.find((m) => m.id === e.target.value);
+                if (found) onSelectModel(found);
+              }}
+              className="w-full bg-[#111827] border border-amber-500/70 text-amber-300 font-bold font-mono text-xs sm:text-sm rounded-lg px-3 py-2 pr-8 outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer shadow appearance-none"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id} className="bg-gray-900 text-white font-mono py-1">
+                  [{m.brand}] {m.modelName} ({m.ratedPowerW || 50}W)
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-4 h-4 text-amber-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
-
-          {/* ACTION BUTTONS (2-COL GRID AT BOTTOM) */}
-          <div className="space-y-1.5 pt-2 border-t border-gray-700">
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={handleAddModel}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Plus className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Add</span>
-              </button>
-
-              <button
-                onClick={handleSaveModelInfo}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Edit3 className="w-3.5 h-3.5 text-blue-400" />
-                <span>Edit</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={handleDuplicateModel}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Copy className="w-3.5 h-3.5 text-amber-400" />
-                <span>Duplicate</span>
-              </button>
-
-              <button
-                onClick={handleDeleteModel}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                <span>Delete</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              <button
-                onClick={() => setShowImportModal(true)}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Upload className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Import</span>
-              </button>
-
-              <button
-                onClick={handleExportModel}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white font-bold text-xs py-1.5 px-2 rounded shadow transition-all flex items-center justify-center gap-1 active:scale-95"
-              >
-                <Download className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Export</span>
-              </button>
-            </div>
-          </div>
+          <span className="text-[10px] font-mono text-amber-300 bg-amber-950/80 border border-amber-700/60 px-2 py-1 rounded shrink-0 font-bold">
+            {models.length} Models Loaded
+          </span>
         </div>
 
+        {/* Action Buttons */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button
+            onClick={handleAddModel}
+            className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-600/80 text-emerald-300 font-bold text-xs py-1.5 px-3 rounded-lg shadow transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            title="Add New Model"
+          >
+            <Plus className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Add Model</span>
+          </button>
+
+          <button
+            onClick={handleDuplicateModel}
+            className="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-amber-300 font-bold text-xs py-1.5 px-3 rounded-lg shadow transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            title="Duplicate Selected Model"
+          >
+            <Copy className="w-3.5 h-3.5 text-amber-400" />
+            <span>Duplicate</span>
+          </button>
+
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-cyan-300 font-bold text-xs py-1.5 px-3 rounded-lg shadow transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            title="Import Model JSON"
+          >
+            <Upload className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Import</span>
+          </button>
+
+          <button
+            onClick={handleExportModel}
+            className="bg-gray-800 hover:bg-gray-700 border border-gray-600 text-indigo-300 font-bold text-xs py-1.5 px-3 rounded-lg shadow transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            title="Export Model JSON"
+          >
+            <Download className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Export</span>
+          </button>
+
+          <button
+            onClick={handleDeleteModel}
+            className="bg-red-950/80 hover:bg-red-900 border border-red-600/80 text-red-300 font-bold text-xs py-1.5 px-3 rounded-lg shadow transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            title="Delete Model"
+          >
+            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            <span>Delete</span>
+          </button>
+        </div>
+      </div>
+
+      {/* 2-COLUMN MAIN CONTENT GRID */}
+      <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-4 shadow-2xl grid grid-cols-1 lg:grid-cols-12 gap-4">
+
         {/* ========================================================================= */}
-        {/* COLUMN 2: MODEL INFORMATION & TREE VIEW (Middle ~35% - Col Span 4) */}
+        {/* COLUMN 1: MODEL INFORMATION & TREE VIEW (Col Span 5) */}
         {/* ========================================================================= */}
-        <div className="lg:col-span-4 bg-[#111827] border border-gray-700 rounded-lg p-3 space-y-3 flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-[#111827] border border-gray-700 rounded-lg p-3.5 space-y-3 flex flex-col justify-between">
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-gray-200 uppercase tracking-wide border-b border-gray-700 pb-1.5">
               Model Information
@@ -972,7 +954,7 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
               </div>
               <button
                 onClick={() => setShowComponentsModal(true)}
-                className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 text-[10px] font-bold px-2.5 py-1 rounded flex items-center gap-1 active:scale-95 shrink-0 transition-all shadow"
+                className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 text-[10px] font-bold px-2.5 py-1 rounded flex items-center gap-1 active:scale-95 shrink-0 transition-all shadow cursor-pointer"
               >
                 <span>Manage</span>
                 <ChevronRight className="w-3.5 h-3.5 text-amber-400" />
@@ -980,18 +962,21 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
             </div>
 
             {/* ADD CYCLE BUTTON */}
-            <div className="pt-1">
+            <div className="pt-1 flex items-center justify-between">
               <button
                 onClick={handleAddCycle}
-                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white text-xs font-bold py-1 px-3 rounded flex items-center gap-1 shadow active:scale-95"
+                className="bg-gray-700 hover:bg-gray-600 border border-gray-500 text-white text-xs font-bold py-1 px-3 rounded flex items-center gap-1 shadow active:scale-95 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5 text-amber-400" />
                 <span>+ Add Cycle</span>
               </button>
+              <span className="text-[10px] font-mono text-slate-400 uppercase">
+                Cycles & Modules Structure
+              </span>
             </div>
 
             {/* TREE VIEW BOX */}
-            <div className="bg-[#1E293B] border border-gray-600 rounded p-2 h-[260px] overflow-y-auto space-y-2 font-mono text-xs">
+            <div className="bg-[#1E293B] border border-gray-600 rounded p-2 h-[380px] overflow-y-auto space-y-2 font-mono text-xs">
               {currentModel?.cycles?.map((cycle) => {
                 const isCycleExpanded = expandedCycles[cycle.id] !== false;
                 const isCycleSelected = cycle.id === selectedCycleId;
@@ -1103,9 +1088,9 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
         </div>
 
         {/* ========================================================================= */}
-        {/* COLUMN 3: MODULE REFERENCE PARAMETERS (Right ~40% - Col Span 5) */}
+        {/* COLUMN 2: MODULE REFERENCE PARAMETERS (Right ~60% - Col Span 7) */}
         {/* ========================================================================= */}
-        <div className="lg:col-span-5 bg-[#111827] border border-gray-700 rounded-lg p-3 space-y-3 flex flex-col justify-between">
+        <div className="lg:col-span-7 bg-[#111827] border border-gray-700 rounded-lg p-3.5 space-y-3 flex flex-col justify-between">
           <div className="space-y-3">
             {/* HEADER: MODULE NAME */}
             <h2 className="text-base font-bold text-gray-100 font-sans border-b border-gray-700 pb-1.5 flex justify-between items-center">
