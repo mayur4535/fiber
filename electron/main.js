@@ -19,13 +19,24 @@ function createWindow() {
     }
   });
 
-  // Remove menu bar for full desktop app experience
+  // Remove menu bar for clean app look, but keep F12 DevTools shortcut
   mainWindow.setMenuBarVisibility(false);
+
+  // Enable F12 to open Developer Tools for debugging if needed
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    mainWindow.loadFile(indexPath).catch((err) => {
+      console.error('Failed to load index.html:', err);
+    });
   }
 }
 
