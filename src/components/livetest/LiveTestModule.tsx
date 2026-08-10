@@ -2058,7 +2058,25 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                    <button
+                      disabled={connectingHardware}
+                      onClick={async () => {
+                        setConnectingHardware(true);
+                        try {
+                          await esp32Service.requestFreshPort(usbBaudRate);
+                        } catch (err: any) {
+                          alert(`USB Serial Connection: ${err.message || 'Port selection cancelled'}`);
+                        } finally {
+                          setConnectingHardware(false);
+                        }
+                      }}
+                      className="flex-1 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:bg-slate-700 text-white rounded-lg font-bold transition-all shadow-md text-xs flex items-center justify-center gap-2 transform active:scale-95"
+                    >
+                      <Zap className="w-4 h-4 text-amber-300" />
+                      <span>{connectingHardware ? 'Connecting...' : '🔍 Scan & Select COM8 / USB Serial Port'}</span>
+                    </button>
+
                     <button
                       disabled={connectingHardware}
                       onClick={async () => {
@@ -2071,16 +2089,16 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                           setConnectingHardware(false);
                         }
                       }}
-                      className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 text-white rounded-lg font-bold transition-all shadow text-xs flex items-center justify-center gap-2"
+                      className="py-2 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 rounded-lg font-semibold transition-all text-xs flex items-center justify-center gap-1.5"
+                      title="Connect using last granted COM port"
                     >
-                      <Zap className="w-4 h-4" />
-                      <span>{connectingHardware ? 'Connecting...' : 'Connect USB Serial COM Port'}</span>
+                      <span>Quick Reconnect</span>
                     </button>
 
                     {espStatus.connectionType === 'USB Serial' && espStatus.connected && (
                       <button
                         onClick={() => esp32Service.disconnectHardware()}
-                        className="px-4 py-2 bg-red-950 hover:bg-red-900 border border-red-700 text-red-300 rounded-lg font-bold text-xs"
+                        className="px-3 py-2 bg-red-950 hover:bg-red-900 border border-red-700 text-red-300 rounded-lg font-bold text-xs"
                       >
                         Disconnect
                       </button>

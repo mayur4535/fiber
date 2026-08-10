@@ -74,6 +74,57 @@ class ESP32CommunicationService {
   }
 
   // --- REAL WEB SERIAL API (USB COM PORT) INTEGRATION ---
+
+  // Get list of real authorized/connected system serial ports
+  public async getConnectedPorts(): Promise<any[]> {
+    if (!('serial' in navigator)) return [];
+    try {
+      const ports = await (navigator as any).serial.getPorts();
+      return ports || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Force browser to open Windows native COM Port selector dialog
+  public async requestFreshPort(baudRate: number = 115200): Promise<boolean> {
+    if (!('serial' in navigator)) {
+      this.logConnection('❌ Web Serial API is not supported in this browser. Please use Google Chrome or Edge.');
+      throw new Error('Web Serial API is not supported in this browser.');
+    }
+
+    await this.disconnectHardware();
+
+    try {
+      this.logConnection(`🔍 Opening Windows USB Serial COM Port selection dialog at ${baudRate} baud...`);
+      const port = await (navigator as any).serial.requestPort();
+      
+      this.logConnection(`🔌 Opening COM Port...`);
+      await port.open({ baudRate });
+
+      this.serialPort = port;
+      this.status.connected = true;
+      this.status.connectionType = 'USB Serial';
+      this.status.portName = `USB Serial (${baudRate} Baud)`;
+      this.status.baudRate = baudRate;
+      this.isRealHardwareConnected = true;
+      this.notifyStatus();
+
+      this.logConnection(`✅ Connected to USB Serial Port successfully! Starting stream reader...`);
+      this.startSerialReader(port);
+      return true;
+    } catch (err: any) {
+      const msg = err.message || String(err);
+      if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
+        const customErr = 'User closed COM port selector or no port was chosen.\n\nTips:\n1. Select "USB-Enhanced-SERIAL CH343" or "ESP32" in the popup window.\n2. Close Arduino IDE Serial Monitor if it is currently holding COM8 open.';
+        this.logConnection(`❌ USB Serial: ${customErr}`);
+        throw new Error(customErr);
+      }
+      this.logConnection(`❌ USB Serial Error: ${msg}`);
+      throw err;
+    }
+  }
+
   public async connectWebSerial(baudRate: number = 115200): Promise<boolean> {
     if (!('serial' in navigator)) {
       this.logConnection('❌ Web Serial API is not supported in this browser. Please use Google Chrome or Edge.');
