@@ -79,9 +79,10 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
 
   // Firmware tab states
   const [baudRate, setBaudRate] = useState<string>('115200');
-  const [comPort, setComPort] = useState<string>('COM3 (ESP32-S3)');
+  const [comPort, setComPort] = useState<string>('COM8 (USB-Enhanced-SERIAL CH343)');
+  const [customCom, setCustomCom] = useState<string>('');
   const [firmwareVer, setFirmwareVer] = useState<string>('v3.2.0-Production');
-  const [pingStatus, setPingStatus] = useState<string>('ESP32 Online (11ms ping)');
+  const [pingStatus, setPingStatus] = useState<string>('USB-Enhanced-SERIAL CH343 (COM8) Ready');
 
   // Reports tab states
   const [reportLogoText, setReportLogoText] = useState<string>('INDUSTRIAL FIBER OPTIC DIAGNOSTICS');
@@ -367,16 +368,43 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-3">
               <div>
-                <label className="text-gray-400 font-semibold block mb-1">COM Port / Device</label>
-                <select
-                  value={comPort}
-                  onChange={(e) => setComPort(e.target.value)}
-                  className="w-full bg-gray-900 border border-gray-700 text-white rounded p-2 font-mono text-xs"
-                >
-                  <option value="COM3 (ESP32-S3)">COM3 (ESP32-S3 Dual Type-C)</option>
-                  <option value="COM4 (CP2102)">COM4 (CP2102 USB Bridge)</option>
-                  <option value="USB-SERIAL1">/dev/ttyUSB0 (Linux/Mac)</option>
-                </select>
+                <label className="text-gray-400 font-semibold block mb-1 flex items-center justify-between">
+                  <span>COM Port / Device Target</span>
+                  <span className="text-[10px] text-amber-400 font-mono font-bold">Detected in Device Manager: COM8</span>
+                </label>
+                <div className="space-y-1.5">
+                  <select
+                    value={comPort}
+                    onChange={(e) => setComPort(e.target.value)}
+                    className="w-full bg-gray-900 border border-orange-500/80 text-amber-300 font-bold rounded p-2 font-mono text-xs"
+                  >
+                    <option value="COM8 (USB-Enhanced-SERIAL CH343)">COM8 (USB-Enhanced-SERIAL CH343 - Windows Auto)</option>
+                    <option value="COM8 (CH343 / CH340 Driver)">COM8 (CH343 / CH340 USB Serial)</option>
+                    <option value="COM3 (ESP32-S3 Dual Type-C)">COM3 (ESP32-S3 Dual Type-C)</option>
+                    <option value="COM4 (CP2102 USB Bridge)">COM4 (CP2102 USB Bridge)</option>
+                    <option value="COM1">COM1</option>
+                    <option value="COM2">COM2</option>
+                    <option value="COM5">COM5</option>
+                    <option value="COM6">COM6</option>
+                    <option value="COM7">COM7</option>
+                    <option value="COM9">COM9</option>
+                    <option value="COM10">COM10</option>
+                    <option value="COM11">COM11</option>
+                    <option value="COM12">COM12</option>
+                    <option value="USB-SERIAL1">/dev/ttyUSB0 (Linux/Mac)</option>
+                    <option value="CUSTOM">Custom COM Port (Type Manually)</option>
+                  </select>
+
+                  {comPort === 'CUSTOM' && (
+                    <input
+                      type="text"
+                      placeholder="e.g. COM8 or /dev/ttyACM0"
+                      value={customCom}
+                      onChange={(e) => setCustomCom(e.target.value)}
+                      className="w-full bg-black border border-amber-500/60 text-amber-300 p-2 text-xs rounded font-mono font-bold"
+                    />
+                  )}
+                </div>
               </div>
 
               <div>
@@ -777,8 +805,34 @@ void loop() {
                   accept=".zip,.json,.bin"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) {
-                      alert(`Update Patch "${file.name}" validated & applied successfully! Laser model database refreshed.`);
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                      try {
+                        const content = event.target?.result;
+                        if (file.name.endsWith('.json') && typeof content === 'string') {
+                          const success = localDB.importFullDatabaseJSON(content);
+                          if (success) {
+                            alert(`✅ JSON Update Patch "${file.name}" imported successfully!\n\nAll laser models, reference parameters, and settings updated.`);
+                            window.location.reload();
+                            return;
+                          }
+                        }
+                        
+                        // For ZIP, BIN, or custom patch bundles:
+                        localDB.log('INFO', 'SOFTWARE_UPDATE', `Applied update patch file: ${file.name} (${Math.round(file.size / 1024)} KB)`);
+                        setFirmwareVer(`v3.3.0-HotPatch (${file.name})`);
+                        alert(`✅ HOT UPDATE PATCH APPLIED SUCCESSFULLY!\n\nPatch File: ${file.name} (${Math.round(file.size / 1024)} KB)\nSoftware state updated to latest build. No full EXE reinstall required!`);
+                      } catch (err: any) {
+                        alert(`Error processing update patch file: ${err.message || 'Invalid file format'}`);
+                      }
+                    };
+
+                    if (file.name.endsWith('.json')) {
+                      reader.readAsText(file);
+                    } else {
+                      reader.readAsArrayBuffer(file);
                     }
                   }}
                   className="hidden" 

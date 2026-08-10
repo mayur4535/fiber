@@ -12,7 +12,9 @@ import {
   Zap, 
   Terminal, 
   RefreshCw,
-  UserCheck
+  UserCheck,
+  Download,
+  Sparkles
 } from 'lucide-react';
 import { ESP32Status, AppUserRole, FiberModel } from '../../types';
 import { esp32Service } from '../../services/esp32Service';
@@ -35,21 +37,56 @@ export const Header: React.FC<HeaderProps> = ({
   const [espStatus, setEspStatus] = useState<ESP32Status>(esp32Service.getStatus());
   const [timeStr, setTimeStr] = useState<string>('');
 
+  // Top Header Auto-Update Indicator states
+  const [updateInfo, setUpdateInfo] = useState<{
+    hasUpdate: boolean;
+    runNumber: number;
+    htmlUrl: string;
+    commitMsg: string;
+  } | null>(null);
+
   useEffect(() => {
     const unsub = esp32Service.subscribeStatus(setEspStatus);
     const timer = setInterval(() => {
       const now = new Date();
       setTimeStr(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ' + now.toLocaleDateString());
     }, 1000);
+
+    // Auto-check GitHub for updates in background (runs on mount)
+    const checkGitHubUpdate = async () => {
+      try {
+        const res = await fetch('https://api.github.com/repos/mayur4535/fiber/actions/runs?per_page=1');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.workflow_runs && data.workflow_runs.length > 0) {
+            const run = data.workflow_runs[0];
+            setUpdateInfo({
+              hasUpdate: true,
+              runNumber: run.run_number,
+              htmlUrl: run.html_url || 'https://github.com/mayur4535/fiber/actions',
+              commitMsg: run.head_commit?.message || 'New EXE Build Artifact'
+            });
+          }
+        }
+      } catch (e) {
+        // Silently catch network errors in background loop
+      }
+    };
+
+    checkGitHubUpdate();
+    // Check every 5 minutes in background
+    const updateCheckInterval = setInterval(checkGitHubUpdate, 300000);
+
     return () => {
       unsub();
       clearInterval(timer);
+      clearInterval(updateCheckInterval);
     };
   }, []);
 
   return (
     <header className="bg-[#0F172A] border-b border-gray-800 px-3 py-1.5 text-white flex flex-row items-center justify-between gap-2 shadow-md z-20 shrink-0">
-      {/* App Branding */}
+      {/* App Branding & Auto Update Notification Badge */}
       <div className="flex items-center gap-2">
         <div className="bg-orange-600 p-1.5 rounded-md flex items-center justify-center text-white font-bold shadow-inner">
           <Activity className="w-4 h-4 animate-pulse" />
@@ -62,6 +99,22 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-[9px] bg-orange-500/20 text-orange-400 border border-orange-500/40 px-1 py-0.2 rounded font-mono font-semibold">
               v3.2
             </span>
+
+            {/* AUTO UPDATE INDICATOR BADGE (LIKE MOBILE / ANDROID) */}
+            {updateInfo && updateInfo.hasUpdate && (
+              <button
+                onClick={() => {
+                  alert(`⚡ NEW SOFTWARE UPDATE DETECTED! (GitHub Build #${updateInfo.runNumber})\n\nCommit: "${updateInfo.commitMsg}"\n\nClicking OK will open the GitHub download page directly to grab the latest EXE artifact.`);
+                  window.open(updateInfo.htmlUrl, '_blank');
+                }}
+                className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-emerald-500 hover:from-amber-400 hover:to-emerald-400 text-black font-extrabold text-[9px] px-2 py-0.5 rounded-full shadow-lg animate-pulse transition-all cursor-pointer transform hover:scale-105"
+                title="Click to download new EXE build directly from GitHub"
+              >
+                <Sparkles className="w-3 h-3 text-black" />
+                <span>UPDATE AVAILABLE (Build #{updateInfo.runNumber})</span>
+                <Download className="w-3 h-3 text-black" />
+              </button>
+            )}
           </div>
           <p className="text-[10px] text-gray-400 flex items-center gap-1.5">
             <span>Diagnostics Engine</span>
