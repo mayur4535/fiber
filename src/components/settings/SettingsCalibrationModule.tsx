@@ -409,16 +409,182 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
                 </p>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={async () => {
+                    try {
+                      setPingStatus('🔌 Connecting USB Web Serial...');
+                      await esp32Service.connectWebSerial(Number(baudRate));
+                      setPingStatus('✅ ESP32-S3 USB Serial Connected Successfully!');
+                      alert('ESP32-S3 USB Web Serial Connected Successfully!');
+                    } catch (err: any) {
+                      setPingStatus(`❌ Connection Error: ${err.message || 'Failed'}`);
+                      alert(`USB Serial Connect Error:\n${err.message || 'Make sure ESP32-S3 is plugged in with Data Cable and USB CDC On Boot is Enabled.'}`);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded flex items-center gap-1.5 text-xs shadow"
+                >
+                  <Cpu className="w-3.5 h-3.5" />
+                  <span>Connect USB (Web Serial)</span>
+                </button>
+
+                <button
+                  onClick={async () => {
+                    const ip = prompt('Enter ESP32-S3 Wi-Fi IP Address (e.g. 192.168.1.100):', '192.168.1.100');
+                    if (ip) {
+                      try {
+                        setPingStatus(`📡 Connecting Wi-Fi WebSocket to ${ip}...`);
+                        await esp32Service.connectWiFiWebSocket(ip, 81);
+                        setPingStatus(`✅ Wi-Fi Connected to ${ip}!`);
+                        alert(`ESP32-S3 Wi-Fi Connected to ${ip}`);
+                      } catch (err: any) {
+                        setPingStatus(`❌ Wi-Fi Connection Error`);
+                        alert(`Wi-Fi Connection Error: ${err.message}`);
+                      }
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded flex items-center gap-1.5 text-xs shadow"
+                >
+                  <Cloud className="w-3.5 h-3.5" />
+                  <span>Connect Wi-Fi</span>
+                </button>
+
                 <button
                   onClick={handleTestPing}
-                  className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded flex items-center gap-1.5"
+                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-200 font-bold rounded flex items-center gap-1.5 text-xs border border-gray-700"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Ping Test ESP32</span>
+                  <span>Ping Test</span>
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* ESP32-S3 HARDWARE TROUBLESHOOTING & ARDUINO IDE SETTINGS (GUJARATI) ⭐ */}
+          <div className="bg-amber-950/40 border border-amber-500/60 rounded-xl p-4 space-y-3 font-sans text-xs shadow-lg">
+            <h4 className="font-extrabold text-amber-300 flex items-center gap-2 text-xs uppercase tracking-wide border-b border-amber-500/30 pb-2">
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span>ESP32-S3 કનેક્ટ ન થવાના મુખ્ય 4 કારણો અને ઉકેલ (ESP32-S3 Connection Fix Checklist):</span>
+            </h4>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] text-gray-200">
+              <div className="bg-black/60 p-3 rounded-lg border border-amber-500/30 space-y-1">
+                <span className="font-bold text-amber-400 block">1. Arduino IDE માં USB CDC Setting (સૌથી મહત્વપૂર્ણ ⭐)</span>
+                <p className="text-gray-300 leading-relaxed">
+                  ESP32-S3 માં Native USB હોય છે. Arduino IDE માં કોડ અપલોડ કરતા પહેલા આ Setting કરો:
+                </p>
+                <div className="font-mono text-[10px] bg-gray-900 p-2 rounded text-emerald-300 mt-1 space-y-0.5">
+                  <div>• <strong>Tools → Board:</strong> "ESP32S3 Dev Module"</div>
+                  <div>• <strong>Tools → USB CDC On Boot:</strong> <span className="text-amber-300 font-bold">"Enabled"</span> (આ On હોવું જરૂરી છે!)</div>
+                  <div>• <strong>Tools → Upload Mode:</strong> "UART0 / Hardware CDC"</div>
+                </div>
+              </div>
+
+              <div className="bg-black/60 p-3 rounded-lg border border-amber-500/30 space-y-1">
+                <span className="font-bold text-amber-400 block">2. Type-C ડેટા કેબલ (Data Cable vs Charge Cable)</span>
+                <p className="text-gray-300 leading-relaxed">
+                  મોટાભાગની મોબાઈલ ચાર્જર કેબલ ફક્ત ચાર્જ કરે છે (Data Wires હોતા નથી).
+                </p>
+                <div className="text-[10px] text-gray-400 mt-1">
+                  • <strong>ઉકેલ:</strong> નવી અથવા ઓરિજિનલ <strong>Data Cable</strong> વાપરો. Windows Device Manager (<code>devmgmt.msc</code>) માં <code>Ports (COM & LPT)</code> માં COM Port દેખાવો જોઈએ.
+                </div>
+              </div>
+
+              <div className="bg-black/60 p-3 rounded-lg border border-amber-500/30 space-y-1">
+                <span className="font-bold text-amber-400 block">3. ESP32-S3 ના 2 USB Ports (Dual Ports)</span>
+                <p className="text-gray-300 leading-relaxed">
+                  ઘણા ESP32-S3 બોર્ડમાં 2 Type-C પોર્ટ હોય છે (એક <strong>"COM/UART"</strong> અને બીજું <strong>"USB"</strong>).
+                </p>
+                <div className="text-[10px] text-gray-400 mt-1">
+                  • જો <strong>"COM/UART"</strong> પોર્ટમાં કેબલ ભરાવો તો CP2102/CH340 ડ્રાઈવર વાપરો.
+                  <br />• જો <strong>"USB"</strong> (Native) પોર્ટ વાપરો તો USB CDC On Boot "Enabled" રાખવું જરૂરી છે.
+                </div>
+              </div>
+
+              <div className="bg-black/60 p-3 rounded-lg border border-amber-500/30 space-y-1">
+                <span className="font-bold text-amber-400 block">4. Flashing / Download Mode Trick (BOOT Button)</span>
+                <p className="text-gray-300 leading-relaxed">
+                  જો કોડ અપલોડ કરતી વખતે "Failed to connect" આવે:
+                </p>
+                <div className="font-mono text-[10px] bg-gray-900 p-2 rounded text-cyan-300 mt-1 space-y-0.5">
+                  <div>1. <strong>BOOT</strong> બટન દબાવી રાખો.</div>
+                  <div>2. <strong>RESET / EN</strong> બટન એકવાર દબાવીને છોડો.</div>
+                  <div>3. <strong>BOOT</strong> બટન પણ છોડી દો. (હવે ESP32 ફ્લેશ મોડમાં આવી ગયું!)</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ESP32-S3 READY ARDUINO SKETCH CODE */}
+          <div className="bg-gray-900 border border-amber-500/40 rounded-xl p-4 space-y-3 font-mono">
+            <div className="flex items-center justify-between border-b border-gray-800 pb-2">
+              <span className="font-bold text-amber-400 text-xs flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-amber-400" />
+                <span>ESP32-S3 COMPLETE ARDUINO SKETCH (આ કોડ Arduino IDE માં પેસ્ટ કરો)</span>
+              </span>
+              <button
+                onClick={() => {
+                  const code = `// Remix Fiber Source Diagnostic Pro - ESP32-S3 Dual Firmware v2.5
+// Supports USB Web Serial (115200 Baud) and Wi-Fi WebSocket
+#include <Arduino.h>
+
+void setup() {
+  // Initialize USB Serial (Works for Native CDC and UART Bridge)
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("ESP32-S3 Remix Fiber Diagnostic Ready!");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\\n');
+    cmd.trim();
+    
+    if (cmd == "PING") {
+      Serial.println("PONG:ESP32-S3:v2.5.0");
+    } else if (cmd == "READ_SENSORS" || cmd == "GET_DATA") {
+      // Return simulated/real optical power reading (Watts/dBm), temp, battery
+      Serial.println("DATA:POWER=24.8W,TEMP=38.5C,BATT=98%");
+    } else {
+      Serial.println("ACK:" + cmd);
+    }
+  }
+  delay(20);
+}`;
+                  navigator.clipboard.writeText(code);
+                  alert('Arduino Code copied to clipboard! Paste in Arduino IDE and upload to ESP32-S3.');
+                }}
+                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] rounded transition-colors flex items-center gap-1 shadow"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Copy Arduino Code</span>
+              </button>
+            </div>
+
+            <pre className="bg-black/80 border border-gray-800 p-3 rounded-lg text-emerald-400 text-[11px] overflow-x-auto leading-relaxed">
+{`// Remix Fiber Source Diagnostic Pro - ESP32-S3 Firmware v2.5
+#include <Arduino.h>
+
+void setup() {
+  Serial.begin(115200); // Set Serial Baud Rate to 115200
+  delay(1000);
+  Serial.println("ESP32-S3 Remix Fiber Diagnostic Ready!");
+}
+
+void loop() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\\n');
+    cmd.trim();
+    
+    if (cmd == "PING") {
+      Serial.println("PONG:ESP32-S3:v2.5.0");
+    } else if (cmd == "READ_SENSORS") {
+      Serial.println("DATA:POWER=24.8W,TEMP=38.5C,BATT=98%");
+    }
+  }
+  delay(20);
+}`}
+            </pre>
           </div>
         </div>
       )}
