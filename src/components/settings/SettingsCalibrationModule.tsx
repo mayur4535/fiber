@@ -87,6 +87,18 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
   const [reportLogoText, setReportLogoText] = useState<string>('INDUSTRIAL FIBER OPTIC DIAGNOSTICS');
   const [autoGenPdf, setAutoGenPdf] = useState<boolean>(true);
 
+  // GitHub Auto Update states
+  const [ghChecking, setGhChecking] = useState<boolean>(false);
+  const [ghRunInfo, setGhRunInfo] = useState<{
+    status: string;
+    conclusion: string;
+    createdAt: string;
+    commitMsg: string;
+    htmlUrl: string;
+    runNumber: number;
+  } | null>(null);
+  const [ghError, setGhError] = useState<string | null>(null);
+
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -789,34 +801,116 @@ void loop() {
                   <span>METHOD 2: GitHub / Cloud OTA Update</span>
                 </span>
                 <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded font-mono font-bold">
-                  AUTO CHECK
+                  LIVE GITHUB API
                 </span>
               </div>
 
               <p className="text-gray-300 text-[11px] leading-relaxed">
-                Check online server or GitHub repository for official app updates, new EXE releases, or auto-updater patches.
+                Check GitHub repository (<code>mayur4535/fiber</code>) for live automated EXE builds created by GitHub Actions.
               </p>
 
               <div className="bg-gray-950 p-3 rounded-lg border border-gray-800 space-y-2 font-mono text-[11px]">
                 <div className="flex justify-between items-center text-gray-400">
-                  <span>Update Server:</span>
-                  <span className="text-gray-200">github.com/remix/fiber-source-pro</span>
+                  <span>Repository:</span>
+                  <a 
+                    href="https://github.com/mayur4535/fiber" 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className="text-cyan-400 underline font-bold hover:text-cyan-300"
+                  >
+                    mayur4535 / fiber
+                  </a>
                 </div>
-                <div className="flex justify-between items-center text-gray-400">
-                  <span>Status:</span>
-                  <span className="text-emerald-400 font-bold">Up-to-Date (v1.0.0)</span>
-                </div>
+
+                {ghRunInfo && (
+                  <div className="space-y-1 pt-1 border-t border-gray-800 text-[10px]">
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-400">Latest Build Run:</span>
+                      <span className="text-amber-300 font-bold">#{ghRunInfo.runNumber}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-400">Build Status:</span>
+                      <span className={`font-bold ${ghRunInfo.conclusion === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {ghRunInfo.status === 'completed' ? `COMPLETED (${ghRunInfo.conclusion.toUpperCase()})` : 'IN PROGRESS'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-400">Date/Time:</span>
+                      <span className="text-gray-300">{new Date(ghRunInfo.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div className="text-gray-400 truncate">
+                      <span className="text-gray-500">Commit:</span> "{ghRunInfo.commitMsg}"
+                    </div>
+                  </div>
+                )}
+
+                {ghError && (
+                  <div className="text-rose-400 text-[10px] bg-rose-950/40 p-1.5 rounded border border-rose-800">
+                    {ghError}
+                  </div>
+                )}
               </div>
 
-              <button
-                onClick={() => {
-                  alert('Checking for updates on GitHub...\n\nResult: You are using the latest version (v1.0.0)! No new EXE build needed.');
-                }}
-                className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded flex items-center justify-center gap-2 shadow transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Check for GitHub / Cloud Updates</span>
-              </button>
+              <div className="space-y-2">
+                <button
+                  disabled={ghChecking}
+                  onClick={async () => {
+                    setGhChecking(true);
+                    setGhError(null);
+                    try {
+                      const res = await fetch('https://api.github.com/repos/mayur4535/fiber/actions/runs?per_page=1');
+                      if (!res.ok) {
+                        throw new Error(`GitHub API returned HTTP ${res.status}`);
+                      }
+                      const data = await res.json();
+                      if (data.workflow_runs && data.workflow_runs.length > 0) {
+                        const run = data.workflow_runs[0];
+                        const runData = {
+                          status: run.status,
+                          conclusion: run.conclusion || 'running',
+                          createdAt: run.created_at,
+                          commitMsg: run.head_commit?.message || 'New EXE Build Commit',
+                          htmlUrl: run.html_url,
+                          runNumber: run.run_number
+                        };
+                        setGhRunInfo(runData);
+
+                        // DIRECT AUTO REDIRECT / OPEN DOWNLOAD PAGE
+                        if (run.html_url) {
+                          alert(`✅ New Update Found! (Build #${run.run_number})\n\nDirecting you to the GitHub download page now...`);
+                          window.open(run.html_url, '_blank');
+                        }
+                      } else {
+                        // Fallback check latest release or repository
+                        const repoUrl = 'https://github.com/mayur4535/fiber/actions';
+                        alert('Checking GitHub Actions...\n\nOpening GitHub Actions page directly for latest build artifact.');
+                        window.open(repoUrl, '_blank');
+                      }
+                    } catch (err: any) {
+                      setGhError(`Error checking GitHub: ${err.message}. Opening repository page...`);
+                      window.open('https://github.com/mayur4535/fiber/actions', '_blank');
+                    } finally {
+                      setGhChecking(false);
+                    }
+                  }}
+                  className="w-full py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold rounded-lg flex items-center justify-center gap-2 shadow-lg transition-all transform active:scale-95 text-xs uppercase tracking-wide disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${ghChecking ? 'animate-spin' : ''}`} />
+                  <span>{ghChecking ? 'Checking GitHub for Updates...' : '⚡ Check Update & Download Direct (GitHub Auto Update)'}</span>
+                </button>
+
+                {ghRunInfo && (
+                  <a
+                    href={ghRunInfo.htmlUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg flex items-center justify-center gap-2 shadow transition-colors text-center block text-xs border border-emerald-400/30"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Direct Download Link: Open GitHub Run #{ghRunInfo.runNumber} Artifacts</span>
+                  </a>
+                )}
+              </div>
             </div>
           </div>
 
@@ -824,15 +918,21 @@ void loop() {
           <div className="bg-gray-900/90 border border-orange-500/50 rounded-xl p-4 space-y-2 text-xs">
             <h4 className="font-extrabold text-orange-400 flex items-center gap-2 text-xs uppercase tracking-wide">
               <ShieldCheck className="w-4 h-4 text-orange-400" />
-              <span>અપડેટ કેવી રીતે કામ કરે છે? (HOW UPDATE WORKS FOR EXE):</span>
+              <span>GitHub માંથી નવી EXE કેવી રીતે ડાઉનલોડ કરવી? (HOW TO DOWNLOAD NEW EXE FROM GITHUB):</span>
             </h4>
-            <div className="space-y-1 text-gray-300 text-[11px] leading-relaxed font-mono">
+            <div className="space-y-1.5 text-gray-300 text-[11px] leading-relaxed font-mono">
               <p>
-                • <strong>રીત 1 (ZIP / Data Patch) - EXE ફરીથી બનાવવાની જરૂર નથી:</strong> જો માત્ર નવું લેઝર મોડલ, રેફરન્સ રીડિંગ કે રૂલ્સ ઉમેરવા હોય તો ZIP કે JSON ફાઇલ સીધી આ પેજ પર Import કરી શકાય છે.
+                • <strong>શા માટે સોફ્ટવેરમાં અગાઉ 'No Update' બતાવતું હતું?</strong> પહેલાં ત્યાં Static Text હતું. હવે તે સીધું જ તમારા GitHub Account (<code>mayur4535/fiber</code>) માંથી લાઈવ ચેક કરે છે.
               </p>
               <p>
-                • <strong>રીત 2 (EXE Update) - કોડ બદલાય ત્યારે:</strong> જો મુખ્ય React/Electron કોડમાં જ ફેરફાર થાય, તો CMD માં <code>npm run build:exe</code> કમાન્ડ રન કરીને નવી EXE સેકન્ડોમાં બની જાય છે.
+                • <strong>નવી EXE ડાઉનલોડ કરવાની સરળ રીત:</strong>
               </p>
+              <ol className="list-decimal list-inside pl-2 space-y-1 text-emerald-300">
+                <li>ઉપર આપેલા <strong>"Check Live GitHub Actions"</strong> બટન પર ક્લિક કરો.</li>
+                <li>સૌથી નવો બિલ્ડ નંબર (જેમ કે #1, #2, #3) દેખાશે.</li>
+                <li><strong>"Open GitHub Run & Download EXE Artifact"</strong> પર ક્લિક કરો.</li>
+                <li>GitHub ના એ પેજમાં સૌથી નીચે <strong>"Artifacts"</strong> સેક્શન હશે, ત્યાંથી <code>Remix-Fiber-Source-Diagnostic-Pro-EXE</code> ડાઉનલોડ કરી લો!</li>
+              </ol>
             </div>
           </div>
         </div>
