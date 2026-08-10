@@ -22,6 +22,27 @@ function createWindow() {
   // Remove menu bar for clean app look, but keep F12 DevTools shortcut
   mainWindow.setMenuBarVisibility(false);
 
+  // Enable Web Serial API permission & auto-select serial port in Electron
+  mainWindow.webContents.session.on('select-serial-port', (event, portList, webContents, callback) => {
+    event.preventDefault();
+    if (portList && portList.length > 0) {
+      // Automatically connect to the first available COM / Serial port (e.g. ESP32-S3)
+      callback(portList[0].portId);
+    } else {
+      callback('');
+    }
+  });
+
+  mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === 'serial') return true;
+    return true;
+  });
+
+  mainWindow.webContents.session.setDevicePermissionHandler((details) => {
+    if (details.deviceType === 'serial') return true;
+    return true;
+  });
+
   // Enable F12 to open Developer Tools for debugging if needed
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' && input.type === 'keyDown') {

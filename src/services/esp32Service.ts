@@ -76,15 +76,46 @@ class ESP32CommunicationService {
   // --- REAL WEB SERIAL API (USB COM PORT) INTEGRATION ---
   public async connectWebSerial(baudRate: number = 115200): Promise<boolean> {
     if (!('serial' in navigator)) {
-      this.logConnection('❌ Web Serial API is not supported in this browser. Please use Google Chrome, Edge, or Opera.');
+      this.logConnection('❌ Web Serial API is not supported in this browser. Please use Google Chrome or Edge.');
       throw new Error('Web Serial API is not supported in this browser.');
     }
 
+    // Always clean up previous port/reader before connecting new one
+    await this.disconnectHardware();
+
     try {
-      this.logConnection(`🔌 Requesting USB Serial Port access at ${baudRate} baud...`);
-      const port = await (navigator as any).serial.requestPort();
-      await port.open({ baudRate });
-      
+      this.logConnection(`🔌 Requesting USB Serial / COM Port access at ${baudRate} baud...`);
+      let port: any = null;
+
+      try {
+        const existingPorts = await (navigator as any).serial.getPorts();
+        if (existingPorts && existingPorts.length > 0) {
+          port = existingPorts[0];
+          this.logConnection('ℹ️ Testing existing granted USB Serial port...');
+        }
+      } catch (e) {
+        // Fall back to requestPort
+      }
+
+      if (!port) {
+        port = await (navigator as any).serial.requestPort();
+      }
+
+      // Open port with 5-second timeout protection to avoid freezing UI if port is busy
+      const openPromise = port.open({ baudRate });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('COM Port open timeout. Port may be busy or locked by Arduino IDE / another program.')), 5000)
+      );
+
+      try {
+        await Promise.race([openPromise, timeoutPromise]);
+      } catch (openErr: any) {
+        // If cached port failed to open, prompt user for fresh port selection
+        this.logConnection(`⚠️ Port open failed (${openErr.message || 'Busy'}). Prompting COM port selection...`);
+        port = await (navigator as any).serial.requestPort();
+        await port.open({ baudRate });
+      }
+
       this.serialPort = port;
       this.status.connected = true;
       this.status.connectionType = 'USB Serial';
@@ -97,28 +128,32 @@ class ESP32CommunicationService {
       this.startSerialReader(port);
       return true;
     } catch (err: any) {
-      this.logConnection(`❌ USB Serial Connection Error: ${err.message || err}`);
+      const msg = err.message || String(err);
+      if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
+        const customErr = 'COM Port not detected by Windows / User closed window.\n\nQuick Fixes:\n1. Use a Data USB Cable (not a charge cable).\n2. Install CP2102 or CH340 / ESP32-S3 CDC Driver in Windows.\n3. Close Arduino IDE Serial Monitor (port may be locked).\n4. In Arduino IDE set: Tools -> USB CDC On Boot: "Enabled".';
+        this.logConnection(`❌ USB Serial Error: ${customErr}`);
+        throw new Error(customErr);
+      }
+      this.logConnection(`❌ USB Serial Connection Error: ${msg}`);
       throw err;
     }
   }
 
   private async startSerialReader(port: any) {
     try {
-      const textDecoder = new TextDecoderStream();
-      const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
-      const reader = textDecoder.readable.getReader();
+      if (!port || !port.readable) return;
+      const reader = port.readable.getReader();
       this.serialReader = reader;
-
+      const decoder = new TextDecoder();
       let buffer = '';
 
-      while (true) {
+      while (this.status.connected && this.serialReader === reader) {
         const { value, done } = await reader.read();
         if (done) {
-          reader.releaseLock();
           break;
         }
         if (value) {
-          buffer += value;
+          buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() || ''; // Keep incomplete trailing line
 
@@ -131,8 +166,9 @@ class ESP32CommunicationService {
           }
         }
       }
+      try { reader.releaseLock(); } catch (e) {}
     } catch (err: any) {
-      this.logConnection(`⚠️ USB Serial Read Stream Disconnected: ${err.message}`);
+      this.logConnection(`⚠️ USB Serial Read Stream Disconnected: ${err.message || err}`);
     } finally {
       this.status.connected = false;
       this.isRealHardwareConnected = false;

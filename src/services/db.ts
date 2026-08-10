@@ -265,19 +265,31 @@ class LocalDBService {
     }
   }
 
-  // --- LOGS ---
+  // --- LOGS (Optimized with In-Memory Cache & Debounced Persistence) ---
+  private memoryLogs: SystemLog[] | null = null;
+  private logSaveTimer: any = null;
+
   public getLogs(): SystemLog[] {
+    if (this.memoryLogs) {
+      return [...this.memoryLogs];
+    }
     try {
       const data = localStorage.getItem(STORAGE_KEYS.LOGS);
-      if (data) return JSON.parse(data);
+      if (data) {
+        this.memoryLogs = JSON.parse(data);
+        return [...(this.memoryLogs || [])];
+      }
     } catch (e) {
       console.error('Failed to load logs:', e);
     }
+    this.memoryLogs = [];
     return [];
   }
 
   public log(level: 'INFO' | 'WARN' | 'ERROR' | 'COMMAND', category: string, message: string, details?: string): void {
-    const logs = this.getLogs();
+    if (!this.memoryLogs) {
+      this.getLogs();
+    }
     const newLog: SystemLog = {
       id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       timestamp: new Date().toISOString(),
@@ -286,17 +298,35 @@ class LocalDBService {
       message,
       details
     };
-    logs.unshift(newLog);
-    // keep max 500 logs
-    if (logs.length > 500) logs.pop();
-    try {
-      localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(logs));
-    } catch (e) {
-      console.error('Failed to save log:', e);
+    if (this.memoryLogs) {
+      this.memoryLogs.unshift(newLog);
+      if (this.memoryLogs.length > 300) {
+        this.memoryLogs.pop();
+      }
+    }
+
+    // Schedule debounced async save to localStorage so main thread never blocks
+    if (!this.logSaveTimer) {
+      this.logSaveTimer = setTimeout(() => {
+        try {
+          if (this.memoryLogs) {
+            localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(this.memoryLogs));
+          }
+        } catch (e) {
+          console.error('Failed to persist logs:', e);
+        } finally {
+          this.logSaveTimer = null;
+        }
+      }, 1000);
     }
   }
 
   public clearLogs(): void {
+    this.memoryLogs = [];
+    if (this.logSaveTimer) {
+      clearTimeout(this.logSaveTimer);
+      this.logSaveTimer = null;
+    }
     localStorage.removeItem(STORAGE_KEYS.LOGS);
   }
 

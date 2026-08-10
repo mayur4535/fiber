@@ -2086,6 +2086,19 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                       </button>
                     )}
                   </div>
+
+                  {/* COM PORT TROUBLESHOOTING GUIDE */}
+                  <div className="bg-amber-950/40 border border-amber-500/50 p-2.5 rounded-lg space-y-1.5 text-[11px] text-amber-200">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-400 uppercase text-[10px]">
+                      <AlertTriangle className="w-3.5 h-3.5" />
+                      <span>COM PORT નથી બતાવતું? (Troubleshooting Guide)</span>
+                    </div>
+                    <ul className="list-disc list-inside space-y-1 text-[10px] text-slate-300">
+                      <li><strong>1. USB Data Cable વાપરો:</strong> ચાર્જિંગ કેબલમાં ડેટા વાયર નથી હોતા. 4-Wire USB Data Cable વાપરો.</li>
+                      <li><strong>2. Windows Driver:</strong> Windows Device Manager માં <strong>CH340 / CP2102 / ESP32-S3 CDC Driver</strong> ઇન્સ્ટોલ હોવો જોઈએ.</li>
+                      <li><strong>3. Arduino Option:</strong> Arduino IDE માં Tools → <strong>USB CDC On Boot: "Enabled"</strong> રાખીને કોડ અપલોડ કરો.</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
             )}
@@ -2131,7 +2144,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                         try {
                           await esp32Service.connectWiFiWebSocket(wifiIp, wifiPort);
                         } catch (err: any) {
-                          alert(`Wi-Fi WebSocket Error: ${err.message}`);
+                          alert(`Wi-Fi Connection Error: ESP32 device not found at ${wifiIp}:${wifiPort}.\n\n1. Check if ESP32 is powered ON.\n2. Ensure laptop & ESP32 are connected to the SAME Wi-Fi router.\n3. Verify exact IP from Arduino Serial Monitor.`);
                         } finally {
                           setConnectingHardware(false);
                         }
@@ -2150,6 +2163,17 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                         Disconnect
                       </button>
                     )}
+                  </div>
+
+                  {/* WIFI TROUBLESHOOTING GUIDE */}
+                  <div className="bg-blue-950/40 border border-blue-500/50 p-2.5 rounded-lg space-y-1 text-[11px] text-blue-200">
+                    <div className="font-bold flex items-center gap-1.5 text-cyan-400 uppercase text-[10px]">
+                      <Info className="w-3.5 h-3.5" />
+                      <span>Wi-Fi WebSocket Error ઉકેલ:</span>
+                    </div>
+                    <p className="text-[10px] text-slate-300 leading-relaxed">
+                      <strong className="text-amber-300">192.168.1.100</strong> એ માત્ર Default IP બતાવે છે. તમારા ESP32 માં Wi-Fi Name અને Password નાખી કોડ અપલોડ કર્યા પછી, Arduino Serial Monitor માં જે <strong>IP Address</strong> બતાવે તે જ લખો (જેમ કે 192.168.1.5 કે 192.168.43.xxx).
+                    </p>
                   </div>
                 </div>
               </div>
