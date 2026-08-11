@@ -164,7 +164,7 @@ export const HistoryReportsModule: React.FC<HistoryReportsModuleProps> = ({
                 {filteredReports.map((report) => (
                   <tr
                     key={report.id}
-                    onClick={() => setSelectedReportModal(report)}
+                    onClick={() => onSelectReportForDiagnosis(report)}
                     className="hover:bg-gray-800/80 cursor-pointer transition-colors"
                   >
                     <td className="p-3 font-bold text-orange-400">{report.id}</td>
@@ -197,22 +197,13 @@ export const HistoryReportsModule: React.FC<HistoryReportsModuleProps> = ({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          downloadPdfReport(report);
-                        }}
-                        className="p-1.5 bg-gray-800 hover:bg-gray-700 text-cyan-400 border border-gray-700 rounded"
-                        title="Download Industrial PDF"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
                           onSelectReportForDiagnosis(report);
                         }}
-                        className="p-1.5 bg-gray-800 hover:bg-gray-700 text-purple-400 border border-gray-700 rounded"
-                        title="View Detailed Diagnosis"
+                        className="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white font-bold border border-purple-400 rounded text-xs inline-flex items-center gap-1.5 shadow"
+                        title="View Full Diagnosis (1. Rule-Based & 2. Google AI)"
                       >
                         <Stethoscope className="w-3.5 h-3.5" />
+                        <span>Open Diagnosis</span>
                       </button>
                       <button
                         onClick={(e) => handleDeleteReport(report.id, e)}

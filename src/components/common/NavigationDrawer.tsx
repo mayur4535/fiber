@@ -58,6 +58,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, desc: 'Control Center' },
     { id: 'livetest', label: 'New Test', icon: Activity, desc: 'ESP32 Real-time Capture' },
+    { id: 'diagnosis', label: 'Fault Diagnosis', icon: FileText, desc: 'Rule-Based & Google AI Analysis' },
     { id: 'pending', label: 'Pending Tests', icon: Clock, desc: 'Resume Interrupted Sessions', badge: pendingCount > 0 ? `${pendingCount} PENDING` : undefined },
     { id: 'history', label: 'History & Reports', icon: FileText, desc: 'Test Records & PDF' },
     { id: 'settings', label: 'Settings', icon: Settings, desc: 'Model Manager & Reference Data' },
