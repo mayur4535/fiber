@@ -289,9 +289,32 @@ class ESP32CommunicationService {
     });
   }
 
+  public async writeToHardware(text: string): Promise<void> {
+    const line = text.endsWith('\n') ? text : `${text}\n`;
+    if (this.serialPort && this.serialPort.writable) {
+      try {
+        const writer = this.serialPort.writable.getWriter();
+        const encoder = new TextEncoder();
+        await writer.write(encoder.encode(line));
+        writer.releaseLock();
+        this.logConnection(`[USB TX] ${line.trim()}`);
+      } catch (e: any) {
+        this.logConnection(`❌ USB Write Error: ${e.message || e}`);
+      }
+    } else if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
+      this.webSocket.send(line);
+      this.logConnection(`[Wi-Fi TX] ${line.trim()}`);
+    }
+  }
+
   // --- PARSE INCOMING SENSOR READINGS FROM PHYSICAL HARDWARE ---
   private parseAndEmitHardwareLine(line: string) {
     try {
+      if (line === 'CAPTURE_OK' || line === 'CAPTURE_COMPLETE') {
+        this.logConnection(`✅ ESP32 Event: ${line}`);
+        return;
+      }
+
       // Extract temperature if line contains TEMP or TEMPERATURE or degree string
       const tempMatch = line.match(/(?:TEMP|TEMPERATURE|DEG|C)[:= ]*([0-9.]+)/i);
       if (tempMatch && tempMatch[1]) {
@@ -302,20 +325,27 @@ class ESP32CommunicationService {
         }
       }
 
-      // 1. Try parsing JSON format: e.g. {"intensity": 12.0, "before": 12.0, "upper": 30.0, "after": 1.0, ...}
-      if (line.startsWith('{') && line.endsWith('}')) {
-        const json = JSON.parse(line);
+      // Handle READING:{"analog_voltage": ...} format from firmware
+      let jsonObj: any = null;
+      if (line.includes('READING:{')) {
+        const jsonStr = line.substring(line.indexOf('READING:{') + 8);
+        jsonObj = JSON.parse(jsonStr);
+      } else if (line.startsWith('{') && line.endsWith('}')) {
+        jsonObj = JSON.parse(line);
+      }
+
+      if (jsonObj) {
         const parsedReading: ReadingParameters = {
-          intensity: typeof json.intensity === 'number' ? json.intensity : (typeof json.Before === 'number' ? json.Before : 0),
-          frequency: typeof json.frequency === 'number' ? json.frequency : 35.0,
-          pulseWidth: typeof json.pulseWidth === 'number' ? json.pulseWidth : 120.0,
-          averagePower: typeof json.averagePower === 'number' ? json.averagePower : (typeof json.intensity === 'number' ? json.intensity : 0),
-          peakPower: typeof json.peakPower === 'number' ? json.peakPower : 0,
-          temperature: typeof json.temperature === 'number' ? json.temperature : (this.status.deviceTemperatureC || 31.2),
-          stability: typeof json.stability === 'number' ? json.stability : 99.0,
-          minimum: typeof json.minimum === 'number' ? json.minimum : 0,
-          maximum: typeof json.maximum === 'number' ? json.maximum : 0,
-          readingTime: typeof json.readingTime === 'number' ? json.readingTime : 5.0
+          intensity: typeof jsonObj.average_power === 'number' ? jsonObj.average_power : (typeof jsonObj.intensity === 'number' ? jsonObj.intensity : (typeof jsonObj.Before === 'number' ? jsonObj.Before : 0)),
+          frequency: typeof jsonObj.frequency === 'number' ? jsonObj.frequency : 35.0,
+          pulseWidth: typeof jsonObj.pulse_width_us === 'number' ? jsonObj.pulse_width_us : (typeof jsonObj.pulseWidth === 'number' ? jsonObj.pulseWidth : 120.0),
+          averagePower: typeof jsonObj.average_power === 'number' ? jsonObj.average_power : (typeof jsonObj.averagePower === 'number' ? jsonObj.averagePower : (typeof jsonObj.intensity === 'number' ? jsonObj.intensity : 0)),
+          peakPower: typeof jsonObj.peak_power === 'number' ? jsonObj.peak_power : (typeof jsonObj.peakPower === 'number' ? jsonObj.peakPower : 0),
+          temperature: typeof jsonObj.temperature === 'number' ? jsonObj.temperature : (this.status.deviceTemperatureC || 31.2),
+          stability: typeof jsonObj.stability === 'number' ? jsonObj.stability : 99.0,
+          minimum: typeof jsonObj.min === 'number' ? jsonObj.min : (typeof jsonObj.minimum === 'number' ? jsonObj.minimum : 0),
+          maximum: typeof jsonObj.max === 'number' ? jsonObj.max : (typeof jsonObj.maximum === 'number' ? jsonObj.maximum : 0),
+          readingTime: typeof jsonObj.reading_time === 'number' ? jsonObj.reading_time : (typeof jsonObj.readingTime === 'number' ? jsonObj.readingTime : 1.0)
         };
 
         if (parsedReading.temperature) {
@@ -325,7 +355,7 @@ class ESP32CommunicationService {
 
         // Emit to stream listeners
         this.readingStreamListeners.forEach((fn) => fn(parsedReading));
-        this.emitPacket(2003, { source: 'RealHardware', json });
+        this.emitPacket(2003, { source: 'RealHardware', json: jsonObj });
         return;
       }
 
@@ -339,9 +369,9 @@ class ESP32CommunicationService {
           }
         });
 
-        if (kvPairs['INTENSITY'] !== undefined || kvPairs['BEFORE'] !== undefined) {
+        if (kvPairs['INTENSITY'] !== undefined || kvPairs['BEFORE'] !== undefined || kvPairs['POWER'] !== undefined) {
           const parsedReading: ReadingParameters = {
-            intensity: kvPairs['INTENSITY'] ?? kvPairs['BEFORE'] ?? 0,
+            intensity: kvPairs['INTENSITY'] ?? kvPairs['BEFORE'] ?? kvPairs['POWER'] ?? 0,
             frequency: kvPairs['FREQ'] ?? kvPairs['FREQUENCY'] ?? 35.0,
             pulseWidth: kvPairs['PULSE'] ?? kvPairs['PULSEWIDTH'] ?? 120.0,
             averagePower: kvPairs['POWER'] ?? kvPairs['INTENSITY'] ?? 0,
@@ -350,7 +380,7 @@ class ESP32CommunicationService {
             stability: kvPairs['STABILITY'] ?? 99.0,
             minimum: kvPairs['MIN'] ?? 0,
             maximum: kvPairs['MAX'] ?? 0,
-            readingTime: 5.0
+            readingTime: 1.0
           };
 
           if (parsedReading.temperature) {
@@ -476,6 +506,10 @@ class ESP32CommunicationService {
     if (!this.status.connected) throw new Error('ESP32 device not connected');
     
     localDB.log('COMMAND', 'ESP32 Raw', `TX -> ${rawCmd}`);
+
+    if (this.isRealHardwareConnected) {
+      await this.writeToHardware(rawCmd);
+    }
     
     const clean = rawCmd.trim().toUpperCase();
     
@@ -623,18 +657,59 @@ class ESP32CommunicationService {
 
     localDB.log('COMMAND', 'ESP32 Capture', 'Sent START_CAPTURE command to ESP32...');
 
-    // Wait 1.2s for physical sensor acquisition
-    await new Promise((res) => setTimeout(res, 1200));
+    if (this.isRealHardwareConnected) {
+      // Send real CAPTURE command over serial or websocket
+      await this.writeToHardware("CAPTURE\n");
 
-    const reading = this.generateSensorReading(baseRef);
+      // Wait for real hardware READING packet with timeout fallback
+      return new Promise<ReadingParameters>((resolve) => {
+        let captureTimeout: any = null;
+        let pendingReading: ReadingParameters | null = null;
 
-    this.status.isCapturing = false;
-    this.notifyStatus();
-    this.emitPacket(2003, { command: 'GET_READING', reading });
+        const unsubStream = this.subscribeReadingStream((reading) => {
+          pendingReading = reading;
+        });
 
-    localDB.log('INFO', 'ESP32 Capture', `Capture Complete: P_avg=${reading.averagePower}W, Temp=${reading.temperature}°C, Stab=${reading.stability}%`);
+        const unsubLogs = this.subscribeLogs((log) => {
+          if (log.includes('CAPTURE_COMPLETE') || log.includes('CAPTURE_OK')) {
+            if (pendingReading) {
+              clearTimeout(captureTimeout);
+              unsubStream();
+              unsubLogs();
+              this.status.isCapturing = false;
+              this.notifyStatus();
+              this.emitPacket(2003, { command: 'GET_READING', reading: pendingReading });
+              localDB.log('INFO', 'ESP32 Capture', `Capture Complete from Physical ESP32: P_avg=${pendingReading.averagePower}W, Stab=${pendingReading.stability}%`);
+              resolve(pendingReading);
+            }
+          }
+        });
 
-    return reading;
+        captureTimeout = setTimeout(() => {
+          unsubStream();
+          unsubLogs();
+          const fallback = pendingReading || this.generateSensorReading(baseRef);
+          this.status.isCapturing = false;
+          this.notifyStatus();
+          this.emitPacket(2003, { command: 'GET_READING', reading: fallback });
+          localDB.log('INFO', 'ESP32 Capture', `Capture Finished: P_avg=${fallback.averagePower}W, Temp=${fallback.temperature}°C`);
+          resolve(fallback);
+        }, 3500);
+      });
+    } else {
+      // Wait 1.2s for simulated acquisition
+      await new Promise((res) => setTimeout(res, 1200));
+
+      const reading = this.generateSensorReading(baseRef);
+
+      this.status.isCapturing = false;
+      this.notifyStatus();
+      this.emitPacket(2003, { command: 'GET_READING', reading });
+
+      localDB.log('INFO', 'ESP32 Capture', `Capture Complete: P_avg=${reading.averagePower}W, Temp=${reading.temperature}°C, Stab=${reading.stability}%`);
+
+      return reading;
+    }
   }
 
   public startLiveStream(baseRef?: ReadingParameters, intervalMs: number = 250): void {

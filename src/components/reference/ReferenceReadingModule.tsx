@@ -99,18 +99,16 @@ export const ReferenceReadingModule: React.FC<ReferenceReadingModuleProps> = ({
     onSave: (val: string) => void;
   }>({ isOpen: false, title: '', defaultValue: '', onSave: () => {} });
 
-  // Reading Capture & Manual Parameter State
+  // Reading Capture & Manual Parameter State (7 required metrics)
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [capturedParams, setCapturedParams] = useState<ReadingParameters>({
     intensity: 99.5,
-    frequency: 30,
-    pulseWidth: 220,
     averagePower: activeModel.ratedPowerW || 50,
-    peakPower: (activeModel.ratedPowerW || 50) * 1.25,
-    temperature: 28.5,
+    loss: 1.5,
     stability: 99.5,
-    minimum: (activeModel.ratedPowerW || 50) * 0.98,
-    maximum: (activeModel.ratedPowerW || 50) * 1.02,
+    minimum: Number(((activeModel.ratedPowerW || 50) * 0.98).toFixed(1)),
+    maximum: Number(((activeModel.ratedPowerW || 50) * 1.02).toFixed(1)),
+    tolerance: 2.0,
     readingTime: 5.0
   });
 
@@ -152,14 +150,12 @@ export const ReferenceReadingModule: React.FC<ReferenceReadingModuleProps> = ({
         const power = activeModel.ratedPowerW || 50;
         setCapturedParams({
           intensity: 99.0,
-          frequency: 30,
-          pulseWidth: 220,
           averagePower: power,
-          peakPower: Number((power * 1.25).toFixed(1)),
-          temperature: 28.5,
+          loss: 1.5,
           stability: 99.2,
           minimum: Number((power * 0.98).toFixed(1)),
           maximum: Number((power * 1.02).toFixed(1)),
+          tolerance: 2.0,
           readingTime: 5.0
         });
       }
@@ -832,38 +828,16 @@ export const ReferenceReadingModule: React.FC<ReferenceReadingModuleProps> = ({
           </div>
         </div>
 
-        {/* 10 Reading Parameter Input Cards (Manual Entry or Live ESP Captured) */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {/* 7 Required Reading Parameter Input Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Intensity (%)</label>
+            <label className="text-[11px] text-amber-400 font-bold block mb-1">Intensity (%)</label>
             <input
               type="number"
               step="0.1"
               value={capturedParams.intensity}
               onChange={(e) => setCapturedParams({ ...capturedParams, intensity: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Frequency (kHz)</label>
-            <input
-              type="number"
-              step="1"
-              value={capturedParams.frequency}
-              onChange={(e) => setCapturedParams({ ...capturedParams, frequency: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Pulse Width (ns)</label>
-            <input
-              type="number"
-              step="1"
-              value={capturedParams.pulseWidth}
-              onChange={(e) => setCapturedParams({ ...capturedParams, pulseWidth: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              className="w-full bg-gray-900 border border-gray-700 text-amber-300 font-mono text-sm font-bold rounded p-2 focus:border-amber-500"
             />
           </div>
 
@@ -879,68 +853,68 @@ export const ReferenceReadingModule: React.FC<ReferenceReadingModuleProps> = ({
           </div>
 
           <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Peak Power (W)</label>
+            <label className="text-[11px] text-rose-400 font-bold block mb-1">Optical Loss (%)</label>
             <input
               type="number"
               step="0.1"
-              value={capturedParams.peakPower}
-              onChange={(e) => setCapturedParams({ ...capturedParams, peakPower: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              value={capturedParams.loss}
+              onChange={(e) => setCapturedParams({ ...capturedParams, loss: Number(e.target.value) })}
+              className="w-full bg-gray-900 border border-gray-700 text-rose-300 font-mono text-sm font-bold rounded p-2 focus:border-rose-500"
             />
           </div>
 
           <div>
-            <label className="text-[11px] text-emerald-400 font-semibold block mb-1">Temperature (°C)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={capturedParams.temperature}
-              onChange={(e) => setCapturedParams({ ...capturedParams, temperature: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-emerald-400 font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Stability (%)</label>
+            <label className="text-[11px] text-emerald-400 font-bold block mb-1">Stability (%)</label>
             <input
               type="number"
               step="0.1"
               value={capturedParams.stability}
               onChange={(e) => setCapturedParams({ ...capturedParams, stability: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              className="w-full bg-gray-900 border border-gray-700 text-emerald-300 font-mono text-sm font-bold rounded p-2 focus:border-emerald-500"
             />
           </div>
 
           <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Minimum Power (W)</label>
+            <label className="text-[11px] text-cyan-400 font-semibold block mb-1">Min Power Range (W)</label>
             <input
               type="number"
               step="0.1"
               value={capturedParams.minimum}
               onChange={(e) => setCapturedParams({ ...capturedParams, minimum: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              className="w-full bg-gray-900 border border-gray-700 text-cyan-300 font-mono text-sm font-bold rounded p-2 focus:border-cyan-500"
             />
           </div>
 
           <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Maximum Power (W)</label>
+            <label className="text-[11px] text-cyan-400 font-semibold block mb-1">Max Power Range (W)</label>
             <input
               type="number"
               step="0.1"
               value={capturedParams.maximum}
               onChange={(e) => setCapturedParams({ ...capturedParams, maximum: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              className="w-full bg-gray-900 border border-gray-700 text-cyan-300 font-mono text-sm font-bold rounded p-2 focus:border-cyan-500"
             />
           </div>
 
           <div>
-            <label className="text-[11px] text-gray-400 font-semibold block mb-1">Duration (s)</label>
+            <label className="text-[11px] text-purple-400 font-semibold block mb-1">Tolerance (%)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={capturedParams.tolerance}
+              onChange={(e) => setCapturedParams({ ...capturedParams, tolerance: Number(e.target.value) })}
+              className="w-full bg-gray-900 border border-gray-700 text-purple-300 font-mono text-sm font-bold rounded p-2 focus:border-purple-500"
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] text-blue-400 font-semibold block mb-1">Reading Time (5 sec)</label>
             <input
               type="number"
               step="0.5"
               value={capturedParams.readingTime}
               onChange={(e) => setCapturedParams({ ...capturedParams, readingTime: Number(e.target.value) })}
-              className="w-full bg-gray-900 border border-gray-700 text-white font-mono text-sm font-bold rounded p-2 focus:border-orange-500"
+              className="w-full bg-gray-900 border border-gray-700 text-blue-300 font-mono text-sm font-bold rounded p-2 focus:border-blue-500"
             />
           </div>
         </div>

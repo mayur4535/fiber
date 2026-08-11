@@ -516,39 +516,35 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     const baseP = activeModel.ratedPowerW || 23.5;
     return {
       intensity: 100,
-      frequency: parseFloat(refThresholds.frequency) || 35.0,
-      pulseWidth: parseFloat(refThresholds.pulseWidth) || 120.0,
       averagePower: baseP,
-      peakPower: Number((baseP * 1.25).toFixed(2)),
-      temperature: 28.0,
+      loss: 1.5,
       stability: 98.5,
       minimum: Number((baseP * 0.97).toFixed(2)),
       maximum: Number((baseP * 1.03).toFixed(2)),
+      tolerance: 2.0,
       readingTime: 5.0
     };
   };
 
-  // Live Captured parameters
+  // Live Captured parameters (7 required metrics)
   const [capturedParams, setCapturedParams] = useState<{
     intensity: string;
-    frequency: string;
-    pulseWidth: string;
-    stability: string;
-    loss: string;
     averagePower: string;
-    readingTime: string;
+    loss: string;
+    stability: string;
     minimum: string;
     maximum: string;
+    tolerance: string;
+    readingTime: string;
   }>({
-    intensity: '23.42 W',
-    frequency: '35.20 kHz',
-    pulseWidth: '120.5 ns',
-    stability: '98.62 %',
-    loss: '1.85 %',
+    intensity: '100 %',
     averagePower: '23.30 W',
-    readingTime: '5.00 s',
-    minimum: '23.11 W',
-    maximum: '23.48 W'
+    loss: '1.85 %',
+    stability: '98.62 %',
+    minimum: '22.80 W',
+    maximum: '24.20 W',
+    tolerance: '2.00 %',
+    readingTime: '5.00 s'
   });
 
   // State for 3 Joint readings (Before, Upper, After) to evaluate exact 4 Master Fault Cases
@@ -568,17 +564,15 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     }));
   }, [selectedJoint, capturedParams.intensity, capturedParams.averagePower]);
 
-  // Parameter Bypass State: key = parameterName (e.g. intensity, frequency), value = boolean (true = active for diagnosis, false = bypassed)
+  // Parameter Bypass State for the 7 required metrics
   const [enabledParams, setEnabledParams] = useState<Record<string, boolean>>({
     intensity: true,
-    frequency: true,
-    pulseWidth: true,
     averagePower: true,
-    peakPower: true,
-    temperature: true,
+    loss: true,
     stability: true,
     minimum: true,
     maximum: true,
+    tolerance: true,
     readingTime: true
   });
 
@@ -604,14 +598,12 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   // Convert string inputs to ReadingParameters for Rules Engine
   const liveParamsNum: ReadingParameters = {
     intensity: parseFloat(capturedParams.intensity) || 0,
-    frequency: parseFloat(capturedParams.frequency) || 0,
-    pulseWidth: parseFloat(capturedParams.pulseWidth) || 0,
     averagePower: parseFloat(capturedParams.averagePower) || 0,
-    peakPower: (parseFloat(capturedParams.averagePower) || 0) * 1.2,
-    temperature: activeFault === 'ThermalOverheat' ? 68.5 : 28.0,
+    loss: parseFloat(capturedParams.loss) || 0,
     stability: parseFloat(capturedParams.stability) || 0,
     minimum: parseFloat(capturedParams.minimum) || 0,
     maximum: parseFloat(capturedParams.maximum) || 0,
+    tolerance: parseFloat(capturedParams.tolerance) || 2.0,
     readingTime: parseFloat(capturedParams.readingTime) || 5.0
   };
 
@@ -1514,12 +1506,13 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
                       let icon = <Zap className="w-3.5 h-3.5 text-amber-400" />;
                       if (comp.parameterName === 'intensity') icon = <Sun className="w-3.5 h-3.5 text-amber-400" />;
-                      if (comp.parameterName === 'frequency') icon = <Activity className="w-3.5 h-3.5 text-cyan-400" />;
-                      if (comp.parameterName === 'pulseWidth') icon = <BarChart2 className="w-3.5 h-3.5 text-blue-400" />;
+                      if (comp.parameterName === 'averagePower') icon = <Zap className="w-3.5 h-3.5 text-orange-400" />;
+                      if (comp.parameterName === 'loss') icon = <ArrowDownCircle className="w-3.5 h-3.5 text-rose-400" />;
                       if (comp.parameterName === 'stability') icon = <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />;
-                      if (comp.parameterName === 'temperature') icon = <Clock className="w-3.5 h-3.5 text-rose-400" />;
                       if (comp.parameterName === 'minimum') icon = <ArrowDownCircle className="w-3.5 h-3.5 text-cyan-400" />;
                       if (comp.parameterName === 'maximum') icon = <ArrowUpCircle className="w-3.5 h-3.5 text-cyan-400" />;
+                      if (comp.parameterName === 'tolerance') icon = <BarChart2 className="w-3.5 h-3.5 text-purple-400" />;
+                      if (comp.parameterName === 'readingTime') icon = <Clock className="w-3.5 h-3.5 text-blue-400" />;
 
                       return (
                         <tr key={comp.parameterName} className={`hover:bg-[#111F38]/60 transition-colors ${!isEnabled ? 'opacity-50 bg-slate-950/40' : ''}`}>

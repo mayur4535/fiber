@@ -16,17 +16,15 @@ import {
   RuleSeverity
 } from '../types';
 
-export const PARAMETER_LABELS: Record<keyof ReadingParameters, { label: string; unit: string }> = {
+export const PARAMETER_LABELS: Record<string, { label: string; unit: string }> = {
   intensity: { label: 'Intensity', unit: '%' },
-  frequency: { label: 'Frequency', unit: 'kHz' },
-  pulseWidth: { label: 'Pulse Width', unit: 'ns' },
   averagePower: { label: 'Average Power', unit: 'W' },
-  peakPower: { label: 'Peak Power', unit: 'W' },
-  temperature: { label: 'Temperature', unit: '°C' },
-  stability: { label: 'Signal Stability', unit: '%' },
-  minimum: { label: 'Minimum Power', unit: 'W' },
-  maximum: { label: 'Maximum Power', unit: 'W' },
-  readingTime: { label: 'Reading Duration', unit: 's' }
+  loss: { label: 'Optical Loss %', unit: '%' },
+  stability: { label: 'Stability %', unit: '%' },
+  minimum: { label: 'Min Range', unit: 'W' },
+  maximum: { label: 'Max Range', unit: 'W' },
+  tolerance: { label: 'Tolerance %', unit: '%' },
+  readingTime: { label: 'Reading Time (5s)', unit: 's' }
 };
 
 /**
@@ -37,11 +35,20 @@ export function compareReadings(
   live: ReadingParameters,
   tolerancePercent: number = 2.0
 ): ParameterComparison[] {
-  const keys = Object.keys(ref) as (keyof ReadingParameters)[];
+  const allowedKeys: (keyof ReadingParameters)[] = [
+    'intensity',
+    'averagePower',
+    'loss',
+    'stability',
+    'minimum',
+    'maximum',
+    'tolerance',
+    'readingTime'
+  ];
 
-  return keys.map((key) => {
-    const refVal = ref[key];
-    const liveVal = live[key];
+  return allowedKeys.map((key) => {
+    const refVal = Number(ref[key] ?? 0);
+    const liveVal = Number(live[key] ?? 0);
     const diff = liveVal - refVal;
     
     let diffPct = 0;
@@ -54,27 +61,15 @@ export function compareReadings(
     let status: TestResultStatus = 'PASS';
     const absDiffPct = Math.abs(diffPct);
 
-    // Temperature tolerance is absolute (°C delta) rather than %
-    if (key === 'temperature') {
-      const tempDiff = Math.abs(diff);
-      if (tempDiff > 10) {
-        status = 'FAIL';
-      } else if (tempDiff > 5) {
-        status = 'WARNING';
-      } else {
-        status = 'PASS';
-      }
+    if (absDiffPct > tolerancePercent * 2.5) {
+      status = 'FAIL';
+    } else if (absDiffPct > tolerancePercent) {
+      status = 'WARNING';
     } else {
-      if (absDiffPct > tolerancePercent * 2.5) {
-        status = 'FAIL';
-      } else if (absDiffPct > tolerancePercent) {
-        status = 'WARNING';
-      } else {
-        status = 'PASS';
-      }
+      status = 'PASS';
     }
 
-    const info = PARAMETER_LABELS[key];
+    const info = PARAMETER_LABELS[key] || { label: key, unit: '' };
 
     return {
       parameterName: key,

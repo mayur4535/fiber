@@ -104,16 +104,14 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
     onSave: (val: string) => void;
   }>({ isOpen: false, title: '', defaultValue: '', onSave: () => {} });
 
-  // 10 Reference Parameters State
+  // 7 Required Reference Parameters State
   const [paramIntensity, setParamIntensity] = useState<string>('--');
-  const [paramFrequency, setParamFrequency] = useState<string>('--');
-  const [paramPulseWidth, setParamPulseWidth] = useState<string>('--');
   const [paramAveragePower, setParamAveragePower] = useState<string>('--');
-  const [paramPeakPower, setParamPeakPower] = useState<string>('--');
-  const [paramTemperature, setParamTemperature] = useState<string>('--');
+  const [paramLoss, setParamLoss] = useState<string>('--');
   const [paramStability, setParamStability] = useState<string>('--');
   const [paramMin, setParamMin] = useState<string>('--');
   const [paramMax, setParamMax] = useState<string>('--');
+  const [paramTolerance, setParamTolerance] = useState<string>('--');
   const [paramReadingTime, setParamReadingTime] = useState<string>('--');
 
   // Sync inputs when currentModel changes
@@ -164,40 +162,34 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
       if (refData && refData.parameters) {
         const p = refData.parameters;
         setParamIntensity(`${p.intensity}`);
-        setParamFrequency(`${p.frequency}`);
-        setParamPulseWidth(`${p.pulseWidth}`);
         setParamAveragePower(`${p.averagePower}`);
-        setParamPeakPower(`${p.peakPower}`);
-        setParamTemperature(`${p.temperature}`);
+        setParamLoss(`${p.loss ?? 1.5}`);
         setParamStability(`${p.stability}`);
         setParamMin(`${p.minimum}`);
         setParamMax(`${p.maximum}`);
+        setParamTolerance(`${p.tolerance ?? 2.0}`);
         setParamReadingTime(`${p.readingTime || 5.0}`);
         setJointStatus(currentModule.reference.status === 'Complete' ? 'Complete' : 'Running');
       } else {
         // Reset to empty
         setParamIntensity('--');
-        setParamFrequency('--');
-        setParamPulseWidth('--');
         setParamAveragePower('--');
-        setParamPeakPower('--');
-        setParamTemperature('--');
+        setParamLoss('--');
         setParamStability('--');
         setParamMin('--');
         setParamMax('--');
+        setParamTolerance('--');
         setParamReadingTime('--');
         setJointStatus('Pending');
       }
     } else {
       setParamIntensity('--');
-      setParamFrequency('--');
-      setParamPulseWidth('--');
       setParamAveragePower('--');
-      setParamPeakPower('--');
-      setParamTemperature('--');
+      setParamLoss('--');
       setParamStability('--');
       setParamMin('--');
       setParamMax('--');
+      setParamTolerance('--');
       setParamReadingTime('--');
       setJointStatus('Pending');
     }
@@ -681,15 +673,13 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
           clearInterval(timer);
           // Set photodiode reference values
           const baseP = currentModel?.ratedPowerW || 23.5;
-          setParamIntensity(`${(baseP * 0.995).toFixed(2)}`);
-          setParamFrequency('35.20');
-          setParamPulseWidth('120.5');
+          setParamIntensity('100.0');
           setParamAveragePower(`${(baseP * 0.995).toFixed(2)}`);
-          setParamPeakPower(`${(baseP * 1.25).toFixed(2)}`);
-          setParamTemperature('28.50');
+          setParamLoss('1.50');
           setParamStability('98.62');
           setParamMin(`${(baseP * 0.98).toFixed(2)}`);
           setParamMax(`${(baseP * 1.01).toFixed(2)}`);
+          setParamTolerance('2.00');
           setParamReadingTime('5.00');
 
           setIsCapturing(false);
@@ -713,15 +703,13 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
     };
 
     const readingParams: ReadingParameters = {
-      intensity: parseNum(paramIntensity, 23.5),
-      frequency: parseNum(paramFrequency, 35.2),
-      pulseWidth: parseNum(paramPulseWidth, 120.5),
+      intensity: parseNum(paramIntensity, 100.0),
       averagePower: parseNum(paramAveragePower, 23.5),
-      peakPower: parseNum(paramPeakPower, 29.3),
-      temperature: parseNum(paramTemperature, 28.5),
+      loss: parseNum(paramLoss, 1.5),
       stability: parseNum(paramStability, 98.6),
       minimum: parseNum(paramMin, 23.0),
       maximum: parseNum(paramMax, 24.0),
+      tolerance: parseNum(paramTolerance, 2.0),
       readingTime: parseNum(paramReadingTime, 5.0)
     };
 
@@ -1229,15 +1217,13 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
             {/* REFERENCE PARAMETERS LIST BOX */}
             <div className="bg-[#1E293B] border border-gray-600 rounded p-3 h-[280px] overflow-y-auto space-y-1.5 font-mono text-xs text-gray-200">
               {[
-                { label: 'Intensity', value: paramIntensity, setter: setParamIntensity, unit: 'W' },
-                { label: 'Frequency', value: paramFrequency, setter: setParamFrequency, unit: 'kHz' },
-                { label: 'Pulse Width', value: paramPulseWidth, setter: setParamPulseWidth, unit: 'ns' },
+                { label: 'Intensity', value: paramIntensity, setter: setParamIntensity, unit: '%' },
                 { label: 'Average Power', value: paramAveragePower, setter: setParamAveragePower, unit: 'W' },
-                { label: 'Peak Power', value: paramPeakPower, setter: setParamPeakPower, unit: 'W' },
-                { label: 'Temperature', value: paramTemperature, setter: setParamTemperature, unit: '°C' },
+                { label: 'Optical Loss', value: paramLoss, setter: setParamLoss, unit: '%' },
                 { label: 'Stability %', value: paramStability, setter: setParamStability, unit: '%' },
-                { label: 'Min', value: paramMin, setter: setParamMin, unit: 'W' },
-                { label: 'Max', value: paramMax, setter: setParamMax, unit: 'W' },
+                { label: 'Min Range', value: paramMin, setter: setParamMin, unit: 'W' },
+                { label: 'Max Range', value: paramMax, setter: setParamMax, unit: 'W' },
+                { label: 'Tolerance %', value: paramTolerance, setter: setParamTolerance, unit: '%' },
                 { label: 'Reading Time', value: paramReadingTime, setter: setParamReadingTime, unit: 's' }
               ].map((row, idx) => (
                 <div key={idx} className="flex justify-between items-center py-0.5 border-b border-gray-700/50">

@@ -17,15 +17,17 @@ export type AppUserRole = 'Operator' | 'Engineer' | 'Admin';
 
 export interface ReadingParameters {
   intensity: number;      // % or relative intensity
-  frequency: number;      // kHz
-  pulseWidth: number;     // ns
   averagePower: number;   // W
-  peakPower: number;      // W or kW
-  temperature: number;    // °C
+  loss?: number;          // % (Optical Loss)
   stability: number;      // %
-  minimum: number;        // W or %
-  maximum: number;        // W or %
-  readingTime: number;    // seconds
+  minimum: number;        // W or % (Min Range)
+  maximum: number;        // W or % (Max Range)
+  tolerance?: number;     // % (Tolerance)
+  readingTime: number;    // seconds (5 sec)
+  frequency?: number;     // kHz
+  pulseWidth?: number;    // ns
+  peakPower?: number;     // W
+  temperature?: number;   // °C
 }
 
 export interface JointReading {

@@ -55,6 +55,24 @@ class LocalDBService {
     this.initDefaultData();
   }
 
+  public get<T = any>(key: string): T | null {
+    try {
+      const data = localStorage.getItem(`fsdp_${key}`);
+      if (data) return JSON.parse(data);
+    } catch (e) {
+      console.error('Failed to get from localDB:', e);
+    }
+    return null;
+  }
+
+  public save<T = any>(key: string, value: T): void {
+    try {
+      localStorage.setItem(`fsdp_${key}`, JSON.stringify(value));
+    } catch (e) {
+      console.error('Failed to save to localDB:', e);
+    }
+  }
+
   private initDefaultData(): void {
     if (!localStorage.getItem(STORAGE_KEYS.MODELS)) {
       this.saveModels(DEFAULT_FIBER_MODELS);

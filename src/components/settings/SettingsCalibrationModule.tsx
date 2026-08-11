@@ -500,6 +500,62 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
             </div>
           </div>
 
+          {/* VERIFIED CIRCUIT DIAGRAM & PIN MAP FROM HAND-DRAWN SCHEMATIC */}
+          <div className="bg-slate-900 border border-teal-500/60 rounded-xl p-4 space-y-3 font-sans text-xs shadow-xl">
+            <div className="flex items-center justify-between border-b border-teal-500/30 pb-2">
+              <h4 className="font-extrabold text-teal-300 flex items-center gap-2 text-xs uppercase tracking-wide">
+                <Activity className="w-4 h-4 text-teal-400" />
+                <span>Verified Optical Front-End Circuit Schematic & ESP32 Pinout Map:</span>
+              </h4>
+              <span className="bg-teal-500/20 text-teal-300 border border-teal-500/40 text-[10px] font-mono px-2 py-0.5 rounded font-bold">
+                Hardware v3.2 Verified
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* OPA380 TIA Stage */}
+              <div className="bg-slate-950/80 p-3 rounded-lg border border-teal-500/30 space-y-1.5">
+                <div className="font-bold text-amber-400 flex items-center justify-between text-[11px]">
+                  <span>1. SFH203 + OPA380 TIA Stage</span>
+                  <span className="text-teal-300 font-mono text-[10px]">GPIO 4 (ADC)</span>
+                </div>
+                <p className="text-slate-300 text-[10px] leading-relaxed">
+                  • <strong>Photodiode:</strong> SFH203 High-Speed PIN Photodiode → Connected to OPA380 <strong>Pin 2 (-IN)</strong>.
+                  <br />• <strong>TIA Feedback:</strong> 330kΩ Resistor || 4.7pF Capacitor between Pin 2 (-IN) and Pin 6 (OUT).
+                  <br />• <strong>Op-Amp Power:</strong> Pin 7 (V+) = +3.3V (0.1µF bypass), Pin 3 (+IN) & Pin 4 (V-) = GND.
+                  <br />• <strong>Analog Output:</strong> Pin 6 (OUT) feeds direct to <strong>ESP32 GPIO 4</strong> (Analog ADC Reading).
+                </p>
+              </div>
+
+              {/* LMV7219 Comparator Stage */}
+              <div className="bg-slate-950/80 p-3 rounded-lg border border-teal-500/30 space-y-1.5">
+                <div className="font-bold text-emerald-400 flex items-center justify-between text-[11px]">
+                  <span>2. LMV7219 Fast Comparator</span>
+                  <span className="text-emerald-300 font-mono text-[10px]">GPIO 21 (Pulse)</span>
+                </div>
+                <p className="text-slate-300 text-[10px] leading-relaxed">
+                  • <strong>Non-Inverting (+IN Pin 3):</strong> Connected to OPA380 Pin 6 Output.
+                  <br />• <strong>Inverting (-IN Pin 4):</strong> VREF Threshold Voltage Network (3.3V bias).
+                  <br />• <strong>Output (Pin 1):</strong> Connected to <strong>ESP32 GPIO 21</strong> with 10kΩ pull-down resistor.
+                  <br />• <strong>Function:</strong> Ultra-fast pulse edge trigger & pulse frequency counter.
+                </p>
+              </div>
+
+              {/* Switch & Trigger Stage */}
+              <div className="bg-slate-950/80 p-3 rounded-lg border border-teal-500/30 space-y-1.5">
+                <div className="font-bold text-cyan-400 flex items-center justify-between text-[11px]">
+                  <span>3. Manual Reading Switch (SW)</span>
+                  <span className="text-cyan-300 font-mono text-[10px]">GPIO 18 (Input)</span>
+                </div>
+                <p className="text-slate-300 text-[10px] leading-relaxed">
+                  • <strong>Reading Switch (SW):</strong> Connected directly to <strong>ESP32 GPIO 18</strong> (Internal Pullup/Pulldown).
+                  <br />• <strong>Function:</strong> Push-button manual test start & laser pulse burst trigger.
+                  <br />• <strong>Baud Rate:</strong> 115200 bps USB Serial Data Transfer.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* ESP32-S3 HARDWARE TROUBLESHOOTING & ARDUINO IDE SETTINGS (GUJARATI) ⭐ */}
           <div className="bg-amber-950/40 border border-amber-500/60 rounded-xl p-4 space-y-3 font-sans text-xs shadow-lg">
             <h4 className="font-extrabold text-amber-300 flex items-center gap-2 text-xs uppercase tracking-wide border-b border-amber-500/30 pb-2">

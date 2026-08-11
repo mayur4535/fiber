@@ -38,6 +38,11 @@ export const Header: React.FC<HeaderProps> = ({
   const [espStatus, setEspStatus] = useState<ESP32Status>(esp32Service.getStatus());
   const [timeStr, setTimeStr] = useState<string>('');
 
+  // Installed software version run number (e.g. EXE#8)
+  const [installedRunNumber, setInstalledRunNumber] = useState<number>(() => {
+    return localDB.get('installed_version_run') || 8;
+  });
+
   // Top Header Auto-Update Indicator & Modal states
   const [updateInfo, setUpdateInfo] = useState<{
     hasUpdate: boolean;
@@ -67,12 +72,24 @@ export const Header: React.FC<HeaderProps> = ({
           const data = await res.json();
           if (data.workflow_runs && data.workflow_runs.length > 0) {
             const run = data.workflow_runs[0];
-            setUpdateInfo({
-              hasUpdate: true,
-              runNumber: run.run_number,
-              htmlUrl: run.html_url || 'https://github.com/mayur4535/fiber/actions',
-              commitMsg: run.head_commit?.message || 'New Hot Patch & COM Port Engine Update'
-            });
+            const latestRun = run.run_number || 8;
+            const currentInstalled = localDB.get('installed_version_run') || 8;
+
+            if (latestRun > currentInstalled) {
+              setUpdateInfo({
+                hasUpdate: true,
+                runNumber: latestRun,
+                htmlUrl: run.html_url || 'https://github.com/mayur4535/fiber/actions',
+                commitMsg: run.head_commit?.message || 'New Hot Patch & COM Port Engine Update'
+              });
+            } else {
+              setUpdateInfo({
+                hasUpdate: false,
+                runNumber: latestRun,
+                htmlUrl: run.html_url || '',
+                commitMsg: ''
+              });
+            }
           }
         }
       } catch (e) {
@@ -99,21 +116,25 @@ export const Header: React.FC<HeaderProps> = ({
 
     setTimeout(() => {
       setUpdateProgress(35);
-      setUpdateStepText('Downloading Hot Patch Files (v3.3.0 Engine & COM8 Driver Bundle)...');
+      setUpdateStepText('Downloading Hot Patch Files (EXE Bundle & COM8 Driver)...');
     }, 800);
 
     setTimeout(() => {
       setUpdateProgress(70);
-      setUpdateStepText('Applying Patch Modules & Migrating Local Databases...');
+      setUpdateStepText('Applying Patch Modules & Updating System Version Register...');
     }, 1800);
 
     setTimeout(() => {
+      const newVersion = updateInfo?.runNumber || (installedRunNumber + 1);
+      localDB.save('installed_version_run', newVersion);
+      setInstalledRunNumber(newVersion);
       setUpdateProgress(100);
-      setUpdateStepText('✅ Software Updated Successfully! No EXE Re-installation Needed.');
+      setUpdateStepText(`✅ Software Updated Successfully to EXE#${newVersion}!`);
       setIsUpdating(false);
       setUpdateComplete(true);
+      setUpdateInfo(prev => prev ? { ...prev, hasUpdate: false } : null);
       // Persist updated state in local database
-      localDB.log('INFO', 'AUTO_UPDATE', 'Software updated via 1-Click Play Store Hot Patch');
+      localDB.log('INFO', 'AUTO_UPDATE', `Software updated to EXE#${newVersion} via 1-Click Play Store Hot Patch`);
     }, 2800);
   };
 
@@ -130,12 +151,13 @@ export const Header: React.FC<HeaderProps> = ({
               <h1 className="text-xs sm:text-sm font-bold tracking-wide uppercase text-gray-100">
                 Fiber Source Diagnostic Pro
               </h1>
-              <span className="text-[9px] bg-orange-500/20 text-orange-400 border border-orange-500/40 px-1 py-0.2 rounded font-mono font-semibold">
-                {updateComplete ? 'v3.3-HotPatch' : 'v3.2'}
+              {/* CURRENT SOFTWARE VERSION DISPLAY */}
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 px-1.5 py-0.2 rounded font-mono font-black tracking-wider">
+                EXE#{installedRunNumber}
               </span>
 
-              {/* AUTO UPDATE INDICATOR BADGE (LIKE PLAY STORE / MOBILE) */}
-              {updateInfo && updateInfo.hasUpdate && (
+              {/* AUTO UPDATE INDICATOR BADGE (ONLY SHOWS/BLINKS IF UPDATE IS ACTUALLY AVAILABLE) */}
+              {updateInfo && updateInfo.hasUpdate && !updateComplete && (
                 <button
                   onClick={() => setIsUpdateModalOpen(true)}
                   className="flex items-center gap-1 bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-400 hover:from-amber-400 hover:to-teal-300 text-black font-extrabold text-[9px] px-2.5 py-0.5 rounded-full shadow-lg animate-pulse transition-all cursor-pointer transform hover:scale-105"
@@ -304,7 +326,7 @@ export const Header: React.FC<HeaderProps> = ({
                   className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4 text-black" />
-                  <span>RELOAD APPLICATION NOW (V3.3.0 APPLIED)</span>
+                  <span>RELOAD APPLICATION NOW (EXE#{installedRunNumber} APPLIED)</span>
                 </button>
               )}
             </div>
