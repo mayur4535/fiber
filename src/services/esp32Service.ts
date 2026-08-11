@@ -307,9 +307,31 @@ class ESP32CommunicationService {
     }
   }
 
+  private hardwareEventListeners: Set<(event: 'CAPTURE' | 'NEXT') => void> = new Set();
+
+  public subscribeHardwareEvents(listener: (event: 'CAPTURE' | 'NEXT') => void): () => void {
+    this.hardwareEventListeners.add(listener);
+    return () => this.hardwareEventListeners.delete(listener);
+  }
+
   // --- PARSE INCOMING SENSOR READINGS FROM PHYSICAL HARDWARE ---
   private parseAndEmitHardwareLine(line: string) {
     try {
+      const cleanLine = line.trim();
+
+      // Handle Hardware Switch Events (GPIO5 Capture & GPIO6 Next)
+      if (cleanLine === 'EVENT:CAPTURE' || cleanLine.includes('EVENT:CAPTURE')) {
+        this.logConnection('🔘 Hardware Event Received: CAPTURE (GPIO5 Switch)');
+        this.hardwareEventListeners.forEach(fn => fn('CAPTURE'));
+        return;
+      }
+
+      if (cleanLine === 'EVENT:NEXT' || cleanLine.includes('EVENT:NEXT')) {
+        this.logConnection('🔘 Hardware Event Received: NEXT (GPIO6 Switch)');
+        this.hardwareEventListeners.forEach(fn => fn('NEXT'));
+        return;
+      }
+
       if (line === 'CAPTURE_OK' || line === 'CAPTURE_COMPLETE') {
         this.logConnection(`✅ ESP32 Event: ${line}`);
         return;
@@ -567,84 +589,75 @@ class ESP32CommunicationService {
   }
 
   /**
-   * Captures a single validated reading or streams reading data from sensors
+   * Generates a validated reading computed from exactly 100 valid intensity samples over 5 seconds
    */
   public generateSensorReading(baseRef?: ReadingParameters): ReadingParameters {
-    const base: ReadingParameters = baseRef || {
-      intensity: 98.0,
-      frequency: 30,
-      pulseWidth: 220,
-      averagePower: 50.0,
-      peakPower: 64.0,
-      temperature: 29.5,
-      stability: 99.2,
-      minimum: 49.2,
-      maximum: 50.8,
-      readingTime: 5.0
-    };
-
-    // Apply noise jitter
-    const jitter = (range: number) => (Math.random() - 0.5) * range;
-
-    let intensity = Math.max(0, base.intensity + jitter(0.4));
-    let averagePower = Math.max(0, base.averagePower + jitter(0.5));
-    let peakPower = Math.max(0, base.peakPower + jitter(1.0));
-    let temperature = base.temperature + jitter(0.3);
-    let stability = Math.max(0, Math.min(100, base.stability + jitter(0.3)));
-    let frequency = base.frequency;
-    let pulseWidth = base.pulseWidth;
+    const targetP = baseRef?.averagePower || 23.5;
+    let baseIntensity = baseRef?.intensity ?? 100.0;
+    let targetPower = targetP;
+    let noiseFactor = 0.015;
 
     // Apply Active Simulated Fault
     switch (this.activeFault) {
-      case 'PumpDegradation':
-        averagePower = Number((base.averagePower * 0.72).toFixed(2)); // 28% power drop
-        peakPower = Number((base.peakPower * 0.70).toFixed(2));
-        intensity = Number((base.intensity * 0.72).toFixed(2));
-        stability = Number((base.stability * 0.9).toFixed(1));
-        break;
-
+      case 'Case1_SourceDamaged':
       case 'FiberBreak':
-        averagePower = 0.0;
-        peakPower = 0.0;
-        intensity = 0.0;
-        stability = 0.0;
+        baseIntensity = 0.0;
+        targetPower = 0.0;
+        noiseFactor = 0.0;
         break;
-
+      case 'PumpDegradation':
+        targetPower = Number((targetP * 0.72).toFixed(2));
+        baseIntensity = 72.0;
+        noiseFactor = 0.03;
+        break;
       case 'ConnectorLoss':
-        averagePower = Number((base.averagePower * 0.85).toFixed(2)); // 15% drop
-        peakPower = Number((base.peakPower * 0.85).toFixed(2));
-        intensity = Number((base.intensity * 0.86).toFixed(2));
+        targetPower = Number((targetP * 0.85).toFixed(2));
+        baseIntensity = 85.0;
+        noiseFactor = 0.02;
         break;
-
-      case 'ThermalOverheat':
-        temperature = Number((base.temperature + 16.5 + Math.random() * 2).toFixed(1)); // 46°C
-        averagePower = Number((base.averagePower * 0.91).toFixed(2));
-        stability = Number((base.stability * 0.85).toFixed(1));
-        break;
-
       case 'UnstableLaser':
-        stability = Number((72.0 + Math.random() * 10).toFixed(1)); // 72-82%
-        averagePower = Number((base.averagePower + jitter(8.0)).toFixed(2));
+        noiseFactor = 0.08;
         break;
-
       default:
         break;
     }
 
-    const minP = Number((averagePower * 0.98).toFixed(2));
-    const maxP = Number((averagePower * 1.02).toFixed(2));
+    // Generate EXACTLY 100 VALID INTENSITY SAMPLES across the 5-second capture
+    const samples: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      if (baseIntensity === 0) {
+        samples.push(0.0);
+      } else {
+        const jitter = (Math.random() - 0.5) * 2 * noiseFactor * targetPower;
+        samples.push(Number(Math.max(0, targetPower + jitter).toFixed(3)));
+      }
+    }
+
+    // Arithmetic mean of all 100 valid intensity samples
+    const sum = samples.reduce((a, b) => a + b, 0);
+    const meanPower = Number((sum / 100).toFixed(2));
+    const minPower = Number(Math.min(...samples).toFixed(2));
+    const maxPower = Number(Math.max(...samples).toFixed(2));
+
+    // Calculate stability using standard deviation across all 100 samples
+    const meanVal = sum / 100;
+    let stability = 0;
+    if (meanVal > 0) {
+      const variance = samples.reduce((acc, v) => acc + Math.pow(v - meanVal, 2), 0) / 100;
+      const stdDev = Math.sqrt(variance);
+      const cv = stdDev / meanVal;
+      stability = Number(Math.max(0, Math.min(100, 100 - (cv * 100))).toFixed(2));
+    }
 
     return {
-      intensity: Number(intensity.toFixed(2)),
-      frequency: Number(frequency.toFixed(2)),
-      pulseWidth: Number(pulseWidth.toFixed(2)),
-      averagePower: Number(averagePower.toFixed(2)),
-      peakPower: Number(peakPower.toFixed(2)),
-      temperature: Number(temperature.toFixed(2)),
-      stability: Number(stability.toFixed(2)),
-      minimum: minP,
-      maximum: maxP,
-      readingTime: base.readingTime
+      intensity: targetPower === 0 ? 0.0 : baseIntensity,
+      averagePower: meanPower,
+      loss: baseRef?.loss ?? 1.5,
+      stability: stability,
+      minimum: minPower,
+      maximum: maxPower,
+      tolerance: baseRef?.tolerance ?? 2.0,
+      readingTime: 5.0
     };
   }
 

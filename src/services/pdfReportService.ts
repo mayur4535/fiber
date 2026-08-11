@@ -94,7 +94,10 @@ export function generatePdfReport(report: DiagnosisReport): jsPDF {
   doc.setTextColor(249, 115, 22);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('AUTOMATIC FAULT DIAGNOSIS SUMMARY', 18, y + 7);
+  const engineTitle = report.engineType === 'GOOGLE_AI' 
+    ? 'GOOGLE AI FAULT DIAGNOSIS SUMMARY (GEMINI MODEL)' 
+    : 'RULE-BASED EXPERT FAULT DIAGNOSIS SUMMARY';
+  doc.text(engineTitle, 18, y + 7);
 
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(9);

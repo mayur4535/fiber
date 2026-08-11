@@ -145,6 +145,8 @@ export interface DiagnosisReport {
   comparisons: ParameterComparison[];
   
   // Diagnostics
+  engineType?: 'RULE_BASED' | 'GOOGLE_AI';
+  aiExplanation?: string;
   overallStatus: TestResultStatus;
   healthScore: number; // 0-100
   healthGrade: 'Excellent' | 'Good' | 'Average' | 'Poor' | 'Critical';
