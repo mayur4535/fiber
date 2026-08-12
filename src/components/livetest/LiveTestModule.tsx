@@ -3,7 +3,7 @@
  * Location-first optical path test progress with full Edit, Rename, Delete, Drag & Drop, and Add capabilities.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Sun, 
   Activity, 
@@ -216,8 +216,10 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const [wifiIp, setWifiIp] = useState<string>('192.168.1.100');
   const [wifiPort, setWifiPort] = useState<number>(81);
   const [hardwareLogs, setHardwareLogs] = useState<string[]>([]);
-  const [autoApplyHardwareStream, setAutoApplyHardwareStream] = useState<boolean>(true);
+  const [autoApplyHardwareStream, setAutoApplyHardwareStream] = useState<boolean>(false);
   const [connectingHardware, setConnectingHardware] = useState<boolean>(false);
+  const [captureSequenceIndex, setCaptureSequenceIndex] = useState<number>(0);
+  const samplesReceivedRef = useRef<boolean>(false);
 
   useEffect(() => {
     const updateTime = () => {
@@ -237,9 +239,9 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
     // Subscribe to live physical sensor reading streams from real USB/Wi-Fi hardware
     const unsubReadings = esp32Service.subscribeReadingStream((reading) => {
-      if (autoApplyHardwareStream) {
+      if (autoApplyHardwareStream && !isCapturing && !hasCaptured) {
         setCapturedParams({
-          intensity: `${reading.intensity.toFixed(2)} W`,
+          intensity: `${reading.intensity.toFixed(2)} %`,
           frequency: `${reading.frequency.toFixed(2)} kHz`,
           pulseWidth: `${reading.pulseWidth.toFixed(1)} ns`,
           stability: `${reading.stability.toFixed(2)} %`,
@@ -750,11 +752,86 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
   const currentJointStatus = jointStatuses[getJointKey()] || 'Pending';
 
+  // --- NEW CAPTURE PROTOCOL ENGINE (100 SAMPLES ARITHMETIC MEAN) ---
+  const processCapturedSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
+    if (!Array.isArray(samples) || samples.length === 0) return;
+
+    // Validate 100 numeric samples
+    const validSamples = samples.map(s => Number(s)).filter(s => !isNaN(s));
+    const count = validSamples.length;
+
+    // 7. Calculate arithmetic mean: average = sum(samples) / 100
+    const sum = validSamples.reduce((acc, v) => acc + v, 0);
+    const avg = count > 0 ? sum / count : 0;
+
+    // 10. Min = minimum of the 100 samples
+    const minVal = count > 0 ? Math.min(...validSamples) : 0;
+
+    // 11. Max = maximum of the 100 samples
+    const maxVal = count > 0 ? Math.max(...validSamples) : 0;
+
+    // 12. Stability calculated from the 100 samples
+    const range = maxVal - minVal;
+    const stabilityVal = avg > 0 ? Math.max(0, Math.min(100, 100 * (1 - range / (2 * avg)))) : 0;
+
+    // 14 & 15. Optical Loss and Tolerance calculated against baseline reference
+    const refIntensity = parseFloat(refThresholds.intensity) || 100;
+    const lossVal = Math.max(0, ((refIntensity - avg) / (refIntensity || 1)) * 100);
+    const toleranceVal = Math.abs(((avg - refIntensity) / (refIntensity || 1)) * 100);
+
+    const newParams = {
+      intensity: `${avg.toFixed(2)} %`,
+      averagePower: `${avg.toFixed(2)} W`,
+      loss: `${lossVal.toFixed(2)} %`,
+      stability: `${stabilityVal.toFixed(2)} %`,
+      minimum: `${minVal.toFixed(2)} W`,
+      maximum: `${maxVal.toFixed(2)} W`,
+      tolerance: `${toleranceVal.toFixed(2)} %`,
+      readingTime: `${readingTimeSec.toFixed(2)} s`
+    };
+
+    setCapturedParams(newParams);
+    setIsCapturing(false);
+    setHasCaptured(true);
+    samplesReceivedRef.current = true;
+
+    setJointStatuses((prev) => ({
+      ...prev,
+      [`${activeCycleId}-${activeStepId}-${selectedJoint}`]: 'Captured'
+    }));
+
+    setJointReadings((prev) => ({
+      ...prev,
+      [selectedJoint]: avg
+    }));
+  }, [selectedJoint, refThresholds.intensity, activeCycleId, activeStepId]);
+
+  // Subscribe to ESP32 Hardware Capture Protocol Events
+  useEffect(() => {
+    const unsubCapEvents = esp32Service.subscribeCaptureEvents((evt) => {
+      if (evt.type === 'CAPTURE_STARTED') {
+        setIsCapturing(true);
+        setCaptureCountdown(5);
+        setHasCaptured(false);
+        samplesReceivedRef.current = false;
+      } else if (evt.type === 'SAMPLES') {
+        const { samples, reading_time } = evt.payload;
+        if (Array.isArray(samples) && samples.length === 100) {
+          processCapturedSamples(samples, reading_time || 5.0);
+        }
+      } else if (evt.type === 'CAPTURE_COMPLETE') {
+        setIsCapturing(false);
+      }
+    });
+    return () => unsubCapEvents();
+  }, [processCapturedSamples]);
+
   const handleCaptureReading = async () => {
     if (isCapturing) return;
     setIsCapturing(true);
     setCaptureCountdown(5);
     setHasCaptured(false);
+    samplesReceivedRef.current = false;
 
     // Send ASCII <CAP> command to ESP32
     try {
@@ -767,126 +844,31 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       setCaptureCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Generate sensor data
-          const baseP = activeModel.ratedPowerW || 23.5;
+          // If real SAMPLES were not received over hardware stream, generate 100 test samples
+          if (!samplesReceivedRef.current) {
+            let testSamples: number[] = [];
 
-          if (activeFault === 'Case1_SourceDamaged') {
-            setCapturedParams({
-              intensity: '0.00 %',
-              averagePower: '0.00 W',
-              loss: '100.00 %',
-              stability: '0.00 %',
-              minimum: '0.00 W',
-              maximum: '0.00 W',
-              tolerance: '100.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'Case2_UpperHighReflect') {
-            const pVal = selectedJoint === 'Before' ? '12.00 W' : selectedJoint === 'Upper' ? '30.00 W' : '1.00 W';
-            const intVal = selectedJoint === 'Before' ? '100.00 %' : selectedJoint === 'Upper' ? '250.00 %' : '8.33 %';
-            setCapturedParams({
-              intensity: intVal,
-              averagePower: pVal,
-              loss: selectedJoint === 'After' ? '91.67 %' : '0.00 %',
-              stability: '90.00 %',
-              minimum: pVal,
-              maximum: pVal,
-              tolerance: selectedJoint === 'Upper' ? '150.00 %' : '2.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'Case3_AfterNoSignal') {
-            const pVal = selectedJoint === 'Before' ? '12.00 W' : selectedJoint === 'Upper' ? '12.00 W' : '1.00 W';
-            const intVal = selectedJoint === 'Before' ? '100.00 %' : selectedJoint === 'Upper' ? '100.00 %' : '8.33 %';
-            setCapturedParams({
-              intensity: intVal,
-              averagePower: pVal,
-              loss: selectedJoint === 'After' ? '91.67 %' : '0.00 %',
-              stability: '90.00 %',
-              minimum: pVal,
-              maximum: pVal,
-              tolerance: selectedJoint === 'After' ? '91.67 %' : '2.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'Case4_MidPathInterruption') {
-            const stepIdx = activeCycle.steps.findIndex(s => s.id === activeStepId);
-            const pVal = stepIdx <= 0 ? '12.00 W' : '0.00 W';
-            const intVal = stepIdx <= 0 ? '100.00 %' : '0.00 %';
-            setCapturedParams({
-              intensity: intVal,
-              averagePower: pVal,
-              loss: stepIdx <= 0 ? '0.00 %' : '100.00 %',
-              stability: stepIdx <= 0 ? '98.00 %' : '0.00 %',
-              minimum: pVal,
-              maximum: pVal,
-              tolerance: stepIdx <= 0 ? '2.00 %' : '100.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'PumpDegradation') {
-            const dropVal = (baseP * 0.715).toFixed(2);
-            setCapturedParams({
-              intensity: '71.50 %',
-              averagePower: `${dropVal} W`,
-              loss: '12.40 %',
-              stability: '94.20 %',
-              minimum: `${(parseFloat(dropVal) * 0.96).toFixed(2)} W`,
-              maximum: `${(parseFloat(dropVal) * 1.02).toFixed(2)} W`,
-              tolerance: '28.50 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'FiberBreak') {
-            setCapturedParams({
-              intensity: '0.00 %',
-              averagePower: '0.00 W',
-              loss: '99.80 %',
-              stability: '0.00 %',
-              minimum: '0.00 W',
-              maximum: '0.00 W',
-              tolerance: '100.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'ConnectorLoss') {
-            const dropVal = (baseP * 0.82).toFixed(2);
-            setCapturedParams({
-              intensity: '82.00 %',
-              averagePower: `${dropVal} W`,
-              loss: '18.00 %',
-              stability: '88.50 %',
-              minimum: `${(parseFloat(dropVal) * 0.95).toFixed(2)} W`,
-              maximum: `${(parseFloat(dropVal) * 1.03).toFixed(2)} W`,
-              tolerance: '18.00 %',
-              readingTime: '5.00 s'
-            });
-          } else if (activeFault === 'ThermalOverheat') {
-            setCapturedParams({
-              intensity: '90.00 %',
-              averagePower: `${(baseP * 0.90).toFixed(2)} W`,
-              loss: '8.50 %',
-              stability: '82.00 %',
-              minimum: `${(baseP * 0.85).toFixed(2)} W`,
-              maximum: `${(baseP * 0.94).toFixed(2)} W`,
-              tolerance: '10.00 %',
-              readingTime: '5.00 s'
-            });
-          } else {
-            const nominalVal = (baseP * 0.995).toFixed(2);
-            setCapturedParams({
-              intensity: '100.00 %',
-              averagePower: `${nominalVal} W`,
-              loss: '1.85 %',
-              stability: '98.62 %',
-              minimum: `${(baseP * 0.98).toFixed(2)} W`,
-              maximum: `${(baseP * 1.01).toFixed(2)} W`,
-              tolerance: '2.00 %',
-              readingTime: '5.00 s'
-            });
+            if (activeFault === 'Case1_SourceDamaged' || activeFault === 'FiberBreak') {
+              testSamples = Array(100).fill(0.0);
+            } else if (activeFault === 'PumpDegradation') {
+              const baseP = activeModel.ratedPowerW || 23.5;
+              const dropVal = baseP * 0.715;
+              testSamples = Array(100).fill(0).map((_, i) => i % 2 === 0 ? dropVal * 0.96 : dropVal * 1.02);
+            } else {
+              // Standard test sequence: Capture 1 = 10.00 (9 & 11), Capture 2 = 11.00 (10 & 12), Capture 3 = 12.00 (11 & 13)
+              const baseAvg = 10.0 + captureSequenceIndex;
+              const minVal = baseAvg - 1.0;
+              const maxVal = baseAvg + 1.0;
+
+              for (let i = 0; i < 100; i++) {
+                testSamples.push(i % 2 === 0 ? minVal : maxVal);
+              }
+
+              setCaptureSequenceIndex((idx) => idx + 1);
+            }
+
+            processCapturedSamples(testSamples, 5.0);
           }
-
-          setIsCapturing(false);
-          setHasCaptured(true);
-          setJointStatuses((prev) => ({
-            ...prev,
-            [getJointKey()]: 'Captured'
-          }));
           return 0;
         }
         return prev - 1;

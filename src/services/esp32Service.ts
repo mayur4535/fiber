@@ -22,6 +22,19 @@ type PacketListener = (packet: ESP32Packet) => void;
 type StatusListener = (status: ESP32Status) => void;
 type ReadingStreamListener = (reading: ReadingParameters) => void;
 
+export interface SamplesPayload {
+  capture_id?: string;
+  sample_count: number;
+  samples: number[];
+  reading_time?: number;
+}
+
+export type CaptureEvent =
+  | { type: 'CAPTURE_STARTED'; captureId?: string }
+  | { type: 'CAPTURE_OK'; captureId?: string }
+  | { type: 'SAMPLES'; payload: SamplesPayload }
+  | { type: 'CAPTURE_COMPLETE'; captureId?: string };
+
 class ESP32CommunicationService {
   private status: ESP32Status = {
     connected: false,
@@ -379,10 +392,16 @@ class ESP32CommunicationService {
   }
 
   private hardwareEventListeners: Set<(event: 'CAPTURE' | 'NEXT') => void> = new Set();
+  private captureEventListeners: Set<(event: CaptureEvent) => void> = new Set();
 
   public subscribeHardwareEvents(listener: (event: 'CAPTURE' | 'NEXT') => void): () => void {
     this.hardwareEventListeners.add(listener);
     return () => this.hardwareEventListeners.delete(listener);
+  }
+
+  public subscribeCaptureEvents(listener: (event: CaptureEvent) => void): () => void {
+    this.captureEventListeners.add(listener);
+    return () => this.captureEventListeners.delete(listener);
   }
 
   // --- PARSE INCOMING SENSOR READINGS FROM PHYSICAL HARDWARE ---
@@ -403,9 +422,45 @@ class ESP32CommunicationService {
         return;
       }
 
-      if (line === 'CAPTURE_OK' || line === 'CAPTURE_COMPLETE') {
-        this.logConnection(`✅ ESP32 Event: ${line}`);
+      // Protocol Event: CAPTURE_STARTED (e.g. CAPTURE_STARTED:TEST001 or CAPTURE_STARTED)
+      if (cleanLine.startsWith('CAPTURE_STARTED')) {
+        const captureId = cleanLine.includes(':') ? cleanLine.split(':')[1] : undefined;
+        this.logConnection(`⚡ ESP32 Protocol: CAPTURE_STARTED (${captureId || 'ACTIVE'})`);
+        this.status.isCapturing = true;
+        this.notifyStatus();
+        this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_STARTED', captureId }));
         return;
+      }
+
+      // Protocol Event: CAPTURE_OK (e.g. CAPTURE_OK:TEST001 or CAPTURE_OK)
+      if (cleanLine.startsWith('CAPTURE_OK')) {
+        const captureId = cleanLine.includes(':') ? cleanLine.split(':')[1] : undefined;
+        this.logConnection(`✅ ESP32 Protocol: CAPTURE_OK (${captureId || 'OK'})`);
+        this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_OK', captureId }));
+        return;
+      }
+
+      // Protocol Event: CAPTURE_COMPLETE (e.g. CAPTURE_COMPLETE:TEST001 or CAPTURE_COMPLETE)
+      if (cleanLine.startsWith('CAPTURE_COMPLETE')) {
+        const captureId = cleanLine.includes(':') ? cleanLine.split(':')[1] : undefined;
+        this.logConnection(`🏁 ESP32 Protocol: CAPTURE_COMPLETE (${captureId || 'COMPLETE'})`);
+        this.status.isCapturing = false;
+        this.notifyStatus();
+        this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_COMPLETE', captureId }));
+        return;
+      }
+
+      // Protocol Event: SAMPLES:{"capture_id":"TEST001","sample_count":100,"samples":[...],"reading_time":5.000}
+      if (cleanLine.includes('SAMPLES:')) {
+        try {
+          const jsonStr = cleanLine.substring(cleanLine.indexOf('SAMPLES:') + 8).trim();
+          const jsonObj = JSON.parse(jsonStr);
+          this.logConnection(`📊 ESP32 Protocol: SAMPLES received (Count: ${jsonObj.sample_count || jsonObj.samples?.length})`);
+          this.captureEventListeners.forEach(fn => fn({ type: 'SAMPLES', payload: jsonObj }));
+          return;
+        } catch (err) {
+          this.logConnection(`❌ ESP32 SAMPLES JSON parse error: ${err}`);
+        }
       }
 
       // Extract temperature if line contains TEMP or TEMPERATURE or degree string
