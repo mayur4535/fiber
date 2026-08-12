@@ -178,7 +178,7 @@ export interface CalibrationData {
 
 export interface ESP32Status {
   connected: boolean;
-  connectionType: 'USB Serial' | 'Bluetooth' | 'WiFi' | 'Wi-Fi WebSocket' | 'Simulated' | 'Disconnected';
+  connectionType: 'USB Serial' | 'Bluetooth' | 'WiFi' | 'Wi-Fi WebSocket' | 'Wi-Fi HTTP Stream' | 'Simulated' | 'Disconnected';
   deviceName: string;
   firmwareVersion: string;
   hardwareVersion: string;

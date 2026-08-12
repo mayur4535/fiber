@@ -112,17 +112,17 @@ export const Header: React.FC<HeaderProps> = ({
   const handleStartPlayStoreUpdate = () => {
     setIsUpdating(true);
     setUpdateProgress(10);
-    setUpdateStepText('Connecting to Update Server & Fetching Patch Manifest...');
+    setUpdateStepText('Connecting to Update Server & Fetching Hot Patch Manifest...');
 
     setTimeout(() => {
-      setUpdateProgress(35);
-      setUpdateStepText('Downloading Hot Patch Files (EXE Bundle & COM8 Driver)...');
-    }, 800);
+      setUpdateProgress(40);
+      setUpdateStepText('Downloading Patch Bundles (Google AI, Wi-Fi Engine, Diagnosis Rules)...');
+    }, 600);
 
     setTimeout(() => {
-      setUpdateProgress(70);
-      setUpdateStepText('Applying Patch Modules & Updating System Version Register...');
-    }, 1800);
+      setUpdateProgress(75);
+      setUpdateStepText('Flushing Stale Browser Caches & Updating System Version Register...');
+    }, 1200);
 
     setTimeout(() => {
       const newVersion = updateInfo?.runNumber || (installedRunNumber + 1);
@@ -133,9 +133,8 @@ export const Header: React.FC<HeaderProps> = ({
       setIsUpdating(false);
       setUpdateComplete(true);
       setUpdateInfo(prev => prev ? { ...prev, hasUpdate: false } : null);
-      // Persist updated state in local database
       localDB.log('INFO', 'AUTO_UPDATE', `Software updated to EXE#${newVersion} via 1-Click Play Store Hot Patch`);
-    }, 2800);
+    }, 1800);
   };
 
   return (
@@ -318,16 +317,28 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 </>
               ) : (
-                <button
-                  onClick={() => {
-                    setIsUpdateModalOpen(false);
-                    window.location.reload();
-                  }}
-                  className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <RefreshCw className="w-4 h-4 text-black" />
-                  <span>RELOAD APPLICATION NOW (EXE#{installedRunNumber} APPLIED)</span>
-                </button>
+                <div className="space-y-2 w-full">
+                  <div className="bg-emerald-950/80 border border-emerald-500/50 p-2.5 rounded-lg text-[11px] text-emerald-200 leading-relaxed font-sans">
+                    <strong>✅ 1-Click Hot Patch Applied!</strong><br />
+                    કોઈ પણ પ્રકારની .exe ફાઇલ ફરીથી ડાઉનલોડ કે ઇન્સ્ટોલ કરવાની જરૂર નથી. નીચેના બટન પર ક્લિક કરવાથી સૉફ્ટવેર તરત નવો કોડ લોડ કરી લેશે.
+                  </div>
+                  <button
+                    onClick={() => {
+                      setIsUpdateModalOpen(false);
+                      try {
+                        sessionStorage.clear();
+                        if ('caches' in window) {
+                          caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+                        }
+                      } catch (e) {}
+                      window.location.href = window.location.origin + window.location.pathname + '?hotpatch=' + Date.now();
+                    }}
+                    className="w-full py-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-black text-xs rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer transform hover:scale-[1.02] active:scale-95"
+                  >
+                    <RefreshCw className="w-4 h-4 text-black animate-spin" />
+                    <span>APPLY HOT PATCH & RELOAD NOW (EXE#{installedRunNumber})</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>

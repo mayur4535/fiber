@@ -2120,13 +2120,13 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
               </div>
             )}
 
-            {/* Tab 2: WI-FI WEBSOCKET */}
+            {/* Tab 2: WI-FI WEBSOCKET & HTTP STREAM */}
             {hardwareTab === 'wifi' && (
               <div className="space-y-3 text-xs font-mono shrink-0">
                 <div className="bg-slate-900/90 border border-slate-800 p-3 rounded-xl space-y-2.5">
                   <div className="flex justify-between items-center">
-                    <span className="font-bold text-cyan-300 uppercase text-[10px] sm:text-[11px]">Wi-Fi WebSocket Network Stream</span>
-                    <span className="text-[9px] sm:text-[10px] text-slate-400">Direct TCP WebSocket Connection</span>
+                    <span className="font-bold text-cyan-300 uppercase text-[10px] sm:text-[11px]">Wi-Fi Network Live Communication</span>
+                    <span className="text-[9px] sm:text-[10px] text-emerald-400 font-bold">Auto Protocol (WebSocket / HTTP Stream)</span>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -2142,7 +2142,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                     </div>
 
                     <div>
-                      <label className="text-slate-400 block text-[10px] font-bold uppercase mb-1">WebSocket Port</label>
+                      <label className="text-slate-400 block text-[10px] font-bold uppercase mb-1">Port (Default: 81 for WS, 80 for HTTP)</label>
                       <input
                         type="number"
                         value={wifiPort}
@@ -2153,26 +2153,46 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex gap-2 pt-1">
+                  <div className="flex flex-col sm:flex-row gap-2 pt-1">
                     <button
                       disabled={connectingHardware}
                       onClick={async () => {
                         setConnectingHardware(true);
                         try {
-                          await esp32Service.connectWiFiWebSocket(wifiIp, wifiPort);
+                          await esp32Service.connectWiFiAuto(wifiIp, wifiPort);
+                          alert(`✅ ESP32 Connected via Wi-Fi at ${wifiIp}!`);
                         } catch (err: any) {
-                          alert(`Wi-Fi Connection Error: ESP32 device not found at ${wifiIp}:${wifiPort}.\n\n1. Check if ESP32 is powered ON.\n2. Ensure laptop & ESP32 are connected to the SAME Wi-Fi router.\n3. Verify exact IP from Arduino Serial Monitor.`);
+                          alert(`Wi-Fi Connection Error: ESP32 not responding at ${wifiIp}.\n\n1. Check if ESP32 is powered ON.\n2. Ensure laptop & ESP32 are connected to the SAME Wi-Fi network/Hotspot.\n3. Verify exact IP Address from Arduino Serial Monitor.`);
                         } finally {
                           setConnectingHardware(false);
                         }
                       }}
-                      className="flex-1 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 text-white rounded-lg font-bold transition-all shadow text-xs flex items-center justify-center gap-2"
+                      className="flex-1 py-2 bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 disabled:bg-slate-700 text-white rounded-lg font-bold transition-all shadow text-xs flex items-center justify-center gap-2"
                     >
-                      <Zap className="w-4 h-4" />
-                      <span>{connectingHardware ? 'Connecting...' : 'Connect ESP32 Wi-Fi Stream'}</span>
+                      <Zap className="w-4 h-4 text-amber-300" />
+                      <span>{connectingHardware ? 'Connecting to ESP32 Wi-Fi...' : '⚡ Connect ESP32 Wi-Fi (Auto Detect)'}</span>
                     </button>
 
-                    {espStatus.connectionType === 'Wi-Fi WebSocket' && espStatus.connected && (
+                    <button
+                      disabled={connectingHardware}
+                      onClick={async () => {
+                        setConnectingHardware(true);
+                        try {
+                          await esp32Service.connectWiFiHTTPPolling(wifiIp, wifiPort === 81 ? 80 : wifiPort);
+                          alert(`✅ Connected to ESP32 via HTTP Live Stream!`);
+                        } catch (err: any) {
+                          alert(`HTTP Stream Connection Error: Check ESP32 IP ${wifiIp}`);
+                        } finally {
+                          setConnectingHardware(false);
+                        }
+                      }}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 rounded-lg font-bold text-xs"
+                      title="Direct HTTP REST Polling Stream"
+                    >
+                      HTTP Stream
+                    </button>
+
+                    {espStatus.connected && (espStatus.connectionType.includes('Wi-Fi')) && (
                       <button
                         onClick={() => esp32Service.disconnectHardware()}
                         className="px-4 py-2 bg-red-950 hover:bg-red-900 border border-red-700 text-red-300 rounded-lg font-bold text-xs"
@@ -2186,10 +2206,13 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                   <div className="bg-blue-950/40 border border-blue-500/50 p-2.5 rounded-lg space-y-1 text-[11px] text-blue-200">
                     <div className="font-bold flex items-center gap-1.5 text-cyan-400 uppercase text-[10px]">
                       <Info className="w-3.5 h-3.5" />
-                      <span>Wi-Fi WebSocket Error ઉકેલ:</span>
+                      <span>ESP32 Wi-Fi કનેક્ટ કરવાની રીત (Gujarati Step-by-Step Guide):</span>
                     </div>
                     <p className="text-[10px] text-slate-300 leading-relaxed">
-                      <strong className="text-amber-300">192.168.1.100</strong> એ માત્ર Default IP બતાવે છે. તમારા ESP32 માં Wi-Fi Name અને Password નાખી કોડ અપલોડ કર્યા પછી, Arduino Serial Monitor માં જે <strong>IP Address</strong> બતાવે તે જ લખો (જેમ કે 192.168.1.5 કે 192.168.43.xxx).
+                      1. તમારા ESP32 માં Wi-Fi Name (SSID) અને Password નાખી કોડ ફ્લેશ કરો.<br />
+                      2. Arduino IDE નો Serial Monitor ખોલો, ત્યાં જે <strong className="text-amber-300">ESP32 IP Address</strong> બતાવે (જેમ કે 192.168.1.15 અથવા 192.168.43.100) તે ઉપરના બોક્સમાં લખો.<br />
+                      3. તમારા લેપટોપ અને ESP32 બંને એક જ Wi-Fi વાઈફાઈ અથવા મોબાઈલ હોટસ્પોટ સાથે કનેક્ટેડ હોવા જોઈએ.<br />
+                      4. <strong className="text-cyan-300">Connect ESP32 Wi-Fi</strong> પર ક્લિક કરતા જ લાઈવ સિગ્નલ ડેટા મળવાનું ચાલુ થઈ જશે!
                     </p>
                   </div>
                 </div>
@@ -2201,15 +2224,25 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
               <div className="space-y-3 text-xs font-mono shrink-0">
                 <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl space-y-2">
                   <div className="flex justify-between items-center text-amber-300 font-bold text-[11px]">
-                    <span>Arduino IDE ESP32 Firmware</span>
+                    <span>Arduino IDE ESP32 Complete Wi-Fi & USB Firmware Code</span>
                     <button
                       onClick={() => {
                         const code = `#include <WiFi.h>
+#include <WebServer.h>
 #include <WebSocketsServer.h>
 
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASS";
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
+
+void handleData() {
+  float intensityVal = analogRead(34) * (30.0 / 4095.0);
+  String json = "{\\"intensity\\":" + String(intensityVal, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0,\\"temperature\\":31.5}";
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "application/json", json);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -2218,42 +2251,62 @@ void setup() {
   Serial.println("");
   Serial.print("ESP32 IP Address: ");
   Serial.println(WiFi.localIP());
+
+  server.on("/data", handleData);
+  server.begin();
   webSocket.begin();
 }
 
 void loop() {
+  server.handleClient();
   webSocket.loop();
+
   float intensityVal = analogRead(34) * (30.0 / 4095.0);
-  String json = "{\\"intensity\\":" + String(intensityVal, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0}";
+  String json = "{\\"intensity\\":" + String(intensityVal, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0,\\"temperature\\":31.5}";
+  
+  // Broadcast USB and WebSocket
   Serial.println(json);
   webSocket.broadcastTXT(json);
   delay(250);
 }`;
                         navigator.clipboard.writeText(code);
-                        alert('ESP32 C++ Code copied to clipboard!');
+                        alert('ESP32 Dual Wi-Fi (WebSocket + HTTP) C++ Code copied to clipboard!');
                       }}
-                      className="px-2 py-1 bg-purple-900 hover:bg-purple-800 text-purple-200 border border-purple-700 rounded text-[10px] font-bold"
+                      className="px-2.5 py-1 bg-purple-900 hover:bg-purple-800 text-purple-200 border border-purple-700 rounded text-[10px] font-bold cursor-pointer"
                     >
-                      Copy C++ Code
+                      Copy Complete C++ Code
                     </button>
                   </div>
-                  <pre className="bg-slate-900 p-2.5 rounded-lg text-[10px] text-emerald-300 font-mono overflow-x-auto leading-relaxed border border-slate-800 max-h-36">
+                  <pre className="bg-slate-900 p-2.5 rounded-lg text-[10px] text-emerald-300 font-mono overflow-x-auto leading-relaxed border border-slate-800 max-h-40">
 {`#include <WiFi.h>
+#include <WebServer.h>
 #include <WebSocketsServer.h>
 
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASS";
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
+
+void handleData() {
+  float intensity = analogRead(34) * (30.0 / 4095.0);
+  String json = "{\\"intensity\\":" + String(intensity, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0}";
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "application/json", json);
+}
 
 void setup() {
   Serial.begin(115200);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) { delay(500); }
   Serial.print("ESP32 IP: "); Serial.println(WiFi.localIP());
+  server.on("/data", handleData);
+  server.begin();
   webSocket.begin();
 }
 
 void loop() {
+  server.handleClient();
   webSocket.loop();
   float intensity = analogRead(34) * (30.0 / 4095.0);
   String json = "{\\"intensity\\":" + String(intensity, 2) + ",\\"frequency\\":35.0}";

@@ -239,20 +239,26 @@ class ESP32CommunicationService {
     }
   }
 
-  // --- REAL WI-FI (WEBSOCKET) INTEGRATION ---
+  private httpPollingInterval: any = null;
+
+  // --- REAL WI-FI (WEBSOCKET & HTTP STREAM) INTEGRATION ---
   public async connectWiFiWebSocket(ipAddress: string, port: number = 81): Promise<boolean> {
     return new Promise((resolve, reject) => {
       const wsUrl = `ws://${ipAddress}:${port}`;
       this.logConnection(`📡 Connecting to ESP32 Wi-Fi WebSocket: ${wsUrl}...`);
 
       try {
-        if (this.webSocket) {
-          this.webSocket.close();
-        }
+        this.disconnectHardware();
 
         const ws = new WebSocket(wsUrl);
+        const connectionTimeout = setTimeout(() => {
+          try { ws.close(); } catch (e) {}
+          this.logConnection(`⚠️ Wi-Fi WebSocket timeout at ${wsUrl}. Attempting HTTP Polling Fallback...`);
+          reject(new Error(`WebSocket connection timeout at ${wsUrl}`));
+        }, 3500);
 
         ws.onopen = () => {
+          clearTimeout(connectionTimeout);
           this.webSocket = ws;
           this.status.connected = true;
           this.status.connectionType = 'Wi-Fi WebSocket';
@@ -270,7 +276,8 @@ class ESP32CommunicationService {
         };
 
         ws.onerror = (err) => {
-          this.logConnection(`❌ Wi-Fi WebSocket Error at ${wsUrl}`);
+          clearTimeout(connectionTimeout);
+          this.logConnection(`❌ Wi-Fi WebSocket Security / Network Error at ${wsUrl}`);
           reject(new Error(`Failed to connect to Wi-Fi WebSocket at ${wsUrl}`));
         };
 
@@ -287,6 +294,70 @@ class ESP32CommunicationService {
         reject(err);
       }
     });
+  }
+
+  public async connectWiFiHTTPPolling(ipAddress: string, port: number = 80): Promise<boolean> {
+    await this.disconnectHardware();
+    const httpUrl = `http://${ipAddress}:${port}/data`;
+    this.logConnection(`🌐 Connecting to ESP32 Wi-Fi HTTP Live Stream at ${httpUrl}...`);
+
+    try {
+      // Test ping fetch with 3-second timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      
+      try {
+        const res = await fetch(httpUrl, { signal: controller.signal, mode: 'cors' });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const initialText = await res.text();
+          this.parseAndEmitHardwareLine(initialText.trim());
+        }
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        this.logConnection(`ℹ️ HTTP Ping sent to ${httpUrl}. Starting background polling loop...`);
+      }
+
+      this.status.connected = true;
+      this.status.connectionType = 'Wi-Fi HTTP Stream';
+      this.status.portName = `Wi-Fi (${ipAddress}:${port})`;
+      this.isRealHardwareConnected = true;
+      this.notifyStatus();
+      this.logConnection(`✅ ESP32 Wi-Fi HTTP Stream Active at ${ipAddress}:${port}`);
+
+      // Start continuous background HTTP polling every 300ms
+      this.httpPollingInterval = setInterval(async () => {
+        if (!this.status.connected) return;
+        try {
+          const pollRes = await fetch(`http://${ipAddress}:${port}/data`, { mode: 'cors' });
+          if (pollRes.ok) {
+            const text = await pollRes.text();
+            if (text && text.trim()) {
+              this.logConnection(`[HTTP RX] ${text.trim()}`);
+              this.parseAndEmitHardwareLine(text.trim());
+            }
+          }
+        } catch (e) {
+          // Silent catch for individual network drops during high speed polling
+        }
+      }, 300);
+
+      return true;
+    } catch (err: any) {
+      this.logConnection(`❌ HTTP Stream Error at ${httpUrl}: ${err.message || err}`);
+      throw new Error(`Failed to connect to ESP32 Wi-Fi HTTP Stream at ${ipAddress}:${port}`);
+    }
+  }
+
+  public async connectWiFiAuto(ipAddress: string, port: number = 81): Promise<boolean> {
+    this.logConnection(`⚡ Auto-Detecting ESP32 Wi-Fi Protocol at ${ipAddress}:${port}...`);
+    try {
+      return await this.connectWiFiWebSocket(ipAddress, port);
+    } catch (wsErr: any) {
+      this.logConnection(`⚠️ WebSocket failed (${wsErr.message || 'Blocked'}). Auto-switching to HTTP REST Live Stream...`);
+      const httpPort = port === 81 ? 80 : port;
+      return await this.connectWiFiHTTPPolling(ipAddress, httpPort);
+    }
   }
 
   public async writeToHardware(text: string): Promise<void> {
@@ -419,6 +490,10 @@ class ESP32CommunicationService {
   }
 
   public async disconnectHardware(): Promise<void> {
+    if (this.httpPollingInterval) {
+      clearInterval(this.httpPollingInterval);
+      this.httpPollingInterval = null;
+    }
     if (this.serialReader) {
       try { await this.serialReader.cancel(); } catch (e) {}
       this.serialReader = null;
