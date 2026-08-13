@@ -98,6 +98,7 @@ class ESP32CommunicationService {
         if (resolved) return;
         resolved = true;
         clearTimeout(timeout);
+        this.helloAckListeners.delete(unsubAck);
 
         this.status.connected = true;
         this.status.connectionType = connectionType;
@@ -120,11 +121,11 @@ class ESP32CommunicationService {
       const timeout = setTimeout(async () => {
         if (resolved) return;
         resolved = true;
-        unsubAck();
+        this.helloAckListeners.delete(unsubAck);
         this.logConnection('🔴 ESP32 NOT VERIFIED: Handshake timeout. ESP32 did not respond with HELLO_ACK.');
         await this.disconnectHardware();
         reject(new Error('ESP32 not detected or handshake failed. Please connect the correct ESP32-S3 hardware.'));
-      }, 4000);
+      }, 3500);
 
       this.helloAckListeners.add(unsubAck);
 
@@ -189,7 +190,11 @@ class ESP32CommunicationService {
       const port = await (navigator as any).serial.requestPort();
       
       this.logConnection(`🔌 Opening COM Port...`);
-      await port.open({ baudRate });
+      const openPromise = port.open({ baudRate });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('COM Port open timeout. Port may be locked by Arduino IDE or another app.')), 4000)
+      );
+      await Promise.race([openPromise, timeoutPromise]);
 
       this.serialPort = port;
       this.status.baudRate = baudRate;
@@ -201,6 +206,7 @@ class ESP32CommunicationService {
       // MANDATORY HANDSHAKE: Send HELLO? and wait for HELLO_ACK
       return await this.performHardwareHandshake('USB Serial', `USB Serial (${baudRate} Baud)`);
     } catch (err: any) {
+      await this.disconnectHardware();
       const msg = err.message || String(err);
       if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
         const customErr = 'User closed COM port selector or no port was chosen.\n\nTips:\n1. Select "USB-Enhanced-SERIAL CH343" or "ESP32" in the popup window.\n2. Close Arduino IDE Serial Monitor if it is currently holding COM8 open.';
@@ -251,7 +257,12 @@ class ESP32CommunicationService {
         // If cached port failed to open, prompt user for fresh port selection
         this.logConnection(`⚠️ Port open failed (${openErr.message || 'Busy'}). Prompting COM port selection...`);
         port = await (navigator as any).serial.requestPort();
-        await port.open({ baudRate });
+        
+        const freshOpenPromise = port.open({ baudRate });
+        const freshTimeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('COM Port open timeout. Port may be busy or locked by another program.')), 4000)
+        );
+        await Promise.race([freshOpenPromise, freshTimeoutPromise]);
       }
 
       this.serialPort = port;
@@ -264,6 +275,7 @@ class ESP32CommunicationService {
       // MANDATORY HANDSHAKE: Send HELLO? and wait for HELLO_ACK
       return await this.performHardwareHandshake('USB Serial', `USB Serial (${baudRate} Baud)`);
     } catch (err: any) {
+      await this.disconnectHardware();
       const msg = err.message || String(err);
       if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
         const customErr = 'COM Port not detected by Windows / User closed window.\n\nQuick Fixes:\n1. Use a Data USB Cable (not a charge cable).\n2. Install CP2102 or CH340 / ESP32-S3 CDC Driver in Windows.\n3. Close Arduino IDE Serial Monitor (port may be locked).\n4. In Arduino IDE set: Tools -> USB CDC On Boot: "Enabled".';
