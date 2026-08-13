@@ -1,9 +1,15 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import electronUpdater from 'electron-updater';
+const { autoUpdater } = electronUpdater;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Configure autoUpdater
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -11,12 +17,74 @@ function createWindow() {
     height: 768,
     minWidth: 1024,
     minHeight: 600,
-    title: 'Remix Fiber Source Diagnostic Pro',
+    title: 'Fiber Source Diagnostic Pro',
     icon: path.join(__dirname, '../public/favicon.ico'),
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
     }
+  });
+
+  // Setup autoUpdater IPC Events
+  autoUpdater.on('checking-for-update', () => {
+    mainWindow.webContents.send('auto-update-event', { status: 'checking' });
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    mainWindow.webContents.send('auto-update-event', {
+      status: 'available',
+      version: info.version,
+      releaseDate: info.releaseDate,
+      releaseNotes: info.releaseNotes
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow.webContents.send('auto-update-event', {
+      status: 'not-available',
+      version: info.version
+    });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    mainWindow.webContents.send('auto-update-event', {
+      status: 'downloading',
+      percent: Math.round(progressObj.percent),
+      bytesPerSecond: progressObj.bytesPerSecond,
+      transferred: progressObj.transferred,
+      total: progressObj.total
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow.webContents.send('auto-update-event', {
+      status: 'downloaded',
+      version: info.version
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    mainWindow.webContents.send('auto-update-event', {
+      status: 'error',
+      message: err ? err.message || String(err) : 'Unknown auto-update error'
+    });
+  });
+
+  // Handle Renderer IPC Messages
+  ipcMain.on('check-for-updates', () => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      mainWindow.webContents.send('auto-update-event', { status: 'error', message: err.message });
+    });
+  });
+
+  ipcMain.on('start-download-update', () => {
+    autoUpdater.downloadUpdate().catch((err) => {
+      mainWindow.webContents.send('auto-update-event', { status: 'error', message: err.message });
+    });
+  });
+
+  ipcMain.on('quit-and-install', () => {
+    autoUpdater.quitAndInstall();
   });
 
   // Remove menu bar for clean app look, but keep F12 DevTools shortcut

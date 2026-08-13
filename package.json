@@ -1,20 +1,27 @@
 {
   "name": "remix-fiber-source-diagnostic-pro",
   "private": true,
-  "version": "1.0.0",
+  "version": "3.2.0",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
-    "build:exe": "vite build && electron-builder",
+    "build:exe": "vite build && electron-builder --publish always",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
   "build": {
     "appId": "com.remix.fibersource.diagnosticpro",
-    "productName": "Remix Fiber Source Diagnostic Pro",
+    "productName": "Fiber Source Diagnostic Pro",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "mayur4535",
+        "repo": "FiberSourceDiagnosticPro"
+      }
+    ],
     "directories": {
       "output": "dist_electron"
     },
@@ -36,6 +43,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "firebase": "^12.17.1",
     "jspdf": "^4.2.1",

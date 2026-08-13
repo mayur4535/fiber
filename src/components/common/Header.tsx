@@ -38,17 +38,14 @@ export const Header: React.FC<HeaderProps> = ({
   const [espStatus, setEspStatus] = useState<ESP32Status>(esp32Service.getStatus());
   const [timeStr, setTimeStr] = useState<string>('');
 
-  // Installed software version run number (e.g. EXE#8)
-  const [installedRunNumber, setInstalledRunNumber] = useState<number>(() => {
-    return localDB.get('installed_version_run') || 8;
-  });
+  const APP_VERSION = '3.2.0';
 
   // Top Header Auto-Update Indicator & Modal states
   const [updateInfo, setUpdateInfo] = useState<{
     hasUpdate: boolean;
-    runNumber: number;
-    htmlUrl: string;
-    commitMsg: string;
+    version: string;
+    releaseNotes: string;
+    downloadUrl?: string;
   } | null>(null);
 
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
@@ -64,42 +61,66 @@ export const Header: React.FC<HeaderProps> = ({
       setTimeStr(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ' + now.toLocaleDateString());
     }, 1000);
 
-    // Auto-check GitHub for updates in background (runs on mount)
-    const checkGitHubUpdate = async () => {
-      try {
-        const res = await fetch('https://api.github.com/repos/mayur4535/fiber/actions/runs?per_page=1');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.workflow_runs && data.workflow_runs.length > 0) {
-            const run = data.workflow_runs[0];
-            const latestRun = run.run_number || 8;
-            const currentInstalled = localDB.get('installed_version_run') || 8;
-
-            if (latestRun > currentInstalled) {
+    const checkUpdate = async () => {
+      if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+        (window as any).ipcRenderer.send('check-for-updates');
+      } else {
+        try {
+          const res = await fetch('https://api.github.com/repos/mayur4535/FiberSourceDiagnosticPro/releases/latest');
+          if (res.ok) {
+            const data = await res.json();
+            const latestTag = (data.tag_name || '').replace(/^v/, '');
+            if (latestTag && latestTag !== APP_VERSION) {
               setUpdateInfo({
                 hasUpdate: true,
-                runNumber: latestRun,
-                htmlUrl: run.html_url || 'https://github.com/mayur4535/fiber/actions',
-                commitMsg: run.head_commit?.message || 'New Hot Patch & COM Port Engine Update'
-              });
-            } else {
-              setUpdateInfo({
-                hasUpdate: false,
-                runNumber: latestRun,
-                htmlUrl: run.html_url || '',
-                commitMsg: ''
+                version: latestTag,
+                releaseNotes: data.body || 'New Fiber Source Diagnostic Pro Release Available',
+                downloadUrl: data.html_url
               });
             }
           }
+        } catch (e) {
+          console.warn('GitHub release check failed:', e);
         }
-      } catch (e) {
-        // Silently catch network errors in background loop
       }
     };
 
-    checkGitHubUpdate();
-    // Check every 5 minutes in background
-    const updateCheckInterval = setInterval(checkGitHubUpdate, 300000);
+    if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+      const ipc = (window as any).ipcRenderer;
+      const handleUpdateEvent = (_: any, data: any) => {
+        if (data.status === 'checking') {
+          setUpdateStepText('Checking GitHub Releases for updates...');
+        } else if (data.status === 'available') {
+          setUpdateInfo({
+            hasUpdate: true,
+            version: data.version,
+            releaseNotes: data.releaseNotes || 'New Fiber Source Diagnostic Pro Release Available'
+          });
+          setUpdateStepText(`New Update v${data.version} available on GitHub Releases.`);
+        } else if (data.status === 'not-available') {
+          setUpdateStepText(`You are running the latest version (v${APP_VERSION}).`);
+        } else if (data.status === 'downloading') {
+          setIsUpdating(true);
+          setUpdateProgress(data.percent || 0);
+          setUpdateStepText(`Downloading update... ${data.percent}% (${((data.transferred || 0) / 1024 / 1024).toFixed(1)} MB / ${((data.total || 0) / 1024 / 1024).toFixed(1)} MB)`);
+        } else if (data.status === 'downloaded') {
+          setIsUpdating(false);
+          setUpdateProgress(100);
+          setUpdateComplete(true);
+          setUpdateStepText(`✅ Update v${data.version} downloaded successfully! Ready to restart.`);
+        } else if (data.status === 'error') {
+          setIsUpdating(false);
+          setUpdateStepText(`Notice: ${data.message}`);
+        }
+      };
+
+      ipc.on('auto-update-event', handleUpdateEvent);
+      ipc.send('check-for-updates');
+    } else {
+      checkUpdate();
+    }
+
+    const updateCheckInterval = setInterval(checkUpdate, 300000);
 
     return () => {
       unsub();
@@ -108,33 +129,24 @@ export const Header: React.FC<HeaderProps> = ({
     };
   }, []);
 
-  // Play Store style 1-Click Update Handler
-  const handleStartPlayStoreUpdate = () => {
-    setIsUpdating(true);
-    setUpdateProgress(10);
-    setUpdateStepText('Connecting to Update Server & Fetching Hot Patch Manifest...');
+  const handleStartUpdate = () => {
+    if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+      setIsUpdating(true);
+      setUpdateStepText('Starting update download from GitHub Releases...');
+      (window as any).ipcRenderer.send('start-download-update');
+    } else if (updateInfo?.downloadUrl) {
+      window.open(updateInfo.downloadUrl, '_blank');
+    } else {
+      window.open('https://github.com/mayur4535/FiberSourceDiagnosticPro/releases', '_blank');
+    }
+  };
 
-    setTimeout(() => {
-      setUpdateProgress(40);
-      setUpdateStepText('Downloading Patch Bundles (Google AI, Wi-Fi Engine, Diagnosis Rules)...');
-    }, 600);
-
-    setTimeout(() => {
-      setUpdateProgress(75);
-      setUpdateStepText('Flushing Stale Browser Caches & Updating System Version Register...');
-    }, 1200);
-
-    setTimeout(() => {
-      const newVersion = updateInfo?.runNumber || (installedRunNumber + 1);
-      localDB.save('installed_version_run', newVersion);
-      setInstalledRunNumber(newVersion);
-      setUpdateProgress(100);
-      setUpdateStepText(`✅ Software Updated Successfully to EXE#${newVersion}!`);
-      setIsUpdating(false);
-      setUpdateComplete(true);
-      setUpdateInfo(prev => prev ? { ...prev, hasUpdate: false } : null);
-      localDB.log('INFO', 'AUTO_UPDATE', `Software updated to EXE#${newVersion} via 1-Click Play Store Hot Patch`);
-    }, 1800);
+  const handleRestartAndInstall = () => {
+    if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+      (window as any).ipcRenderer.send('quit-and-install');
+    } else {
+      window.location.reload();
+    }
   };
 
   return (
@@ -152,7 +164,7 @@ export const Header: React.FC<HeaderProps> = ({
               </h1>
               {/* CURRENT SOFTWARE VERSION DISPLAY */}
               <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 px-1.5 py-0.2 rounded font-mono font-black tracking-wider">
-                EXE#{installedRunNumber}
+                v{APP_VERSION}
               </span>
 
               {/* AUTO UPDATE INDICATOR BADGE (ONLY SHOWS/BLINKS IF UPDATE IS ACTUALLY AVAILABLE) */}
@@ -160,10 +172,10 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   onClick={() => setIsUpdateModalOpen(true)}
                   className="flex items-center gap-1 bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-400 hover:from-amber-400 hover:to-teal-300 text-black font-extrabold text-[9px] px-2.5 py-0.5 rounded-full shadow-lg animate-pulse transition-all cursor-pointer transform hover:scale-105"
-                  title="Play Store style 1-Click Update available!"
+                  title="Software Update Available on GitHub Releases!"
                 >
                   <Sparkles className="w-3 h-3 text-black" />
-                  <span>PLAY STORE UPDATE AVAILABLE #{updateInfo.runNumber}</span>
+                  <span>UPDATE AVAILABLE v{updateInfo.version}</span>
                   <Download className="w-3 h-3 text-black" />
                 </button>
               )}
@@ -268,30 +280,30 @@ export const Header: React.FC<HeaderProps> = ({
             {/* WHAT'S NEW IN UPDATE */}
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-xs space-y-2">
               <div className="font-bold text-amber-300 text-[11px] uppercase flex justify-between">
-                <span>Update Package Build #{updateInfo?.runNumber || '3.3.0'}</span>
-                <span className="text-emerald-400 font-mono">v3.3.0 Hot Patch</span>
+                <span>Update Release v{updateInfo?.version || '3.2.1'}</span>
+                <span className="text-emerald-400 font-mono">Current: v{APP_VERSION}</span>
               </div>
-              <ul className="list-disc list-inside space-y-1 text-slate-300 text-[11px] leading-relaxed">
-                <li><strong>Direct COM8 USB Serial Support:</strong> Seamless Windows Device Manager auto-detection.</li>
-                <li><strong>Settings Module Optimization:</strong> Anti-hang memory cache & instant load.</li>
-                <li><strong>Over-The-Air Patching:</strong> Updates features automatically like Android Play Store without downloading setup.exe files again!</li>
-              </ul>
+              <p className="text-slate-300 text-[11px] leading-relaxed whitespace-pre-wrap">
+                {updateInfo?.releaseNotes || 'Includes direct USB Serial auto-handshake, hardware heartbeat, and raw 100 sample validation.'}
+              </p>
             </div>
 
             {/* PROGRESS BAR & STATUS */}
-            {(isUpdating || updateComplete) && (
-              <div className="space-y-2 pt-1">
-                <div className="flex justify-between items-center text-xs font-mono font-bold">
+            {(isUpdating || updateComplete || updateStepText) && (
+              <div className="space-y-2 pt-1 font-mono">
+                <div className="flex justify-between items-center text-xs font-bold">
                   <span className="text-slate-300">{updateStepText}</span>
-                  <span className="text-emerald-400">{updateProgress}%</span>
+                  {isUpdating && <span className="text-emerald-400">{updateProgress}%</span>}
                 </div>
 
-                <div className="w-full bg-slate-950 rounded-full h-3.5 p-0.5 border border-slate-800 overflow-hidden">
-                  <div 
-                    className="bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-400 h-full rounded-full transition-all duration-300 shadow-lg"
-                    style={{ width: `${updateProgress}%` }}
-                  />
-                </div>
+                {isUpdating && (
+                  <div className="w-full bg-slate-950 rounded-full h-3.5 p-0.5 border border-slate-800 overflow-hidden">
+                    <div 
+                      className="bg-gradient-to-r from-amber-400 via-emerald-400 to-teal-400 h-full rounded-full transition-all duration-300 shadow-lg"
+                      style={{ width: `${updateProgress}%` }}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -301,11 +313,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <>
                   <button
                     disabled={isUpdating}
-                    onClick={handleStartPlayStoreUpdate}
+                    onClick={handleStartUpdate}
                     className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 disabled:opacity-50 text-black font-extrabold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 transform active:scale-95 cursor-pointer"
                   >
                     <Download className="w-4 h-4 text-black" />
-                    <span>{isUpdating ? 'UPDATING NOW...' : '⚡ UPDATE NOW (ONE-CLICK)'}</span>
+                    <span>{isUpdating ? 'DOWNLOADING UPDATE...' : '⚡ UPDATE NOW'}</span>
                   </button>
 
                   <button
@@ -313,30 +325,21 @@ export const Header: React.FC<HeaderProps> = ({
                     onClick={() => setIsUpdateModalOpen(false)}
                     className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all border border-slate-700"
                   >
-                    Later
+                    Close
                   </button>
                 </>
               ) : (
                 <div className="space-y-2 w-full">
                   <div className="bg-emerald-950/80 border border-emerald-500/50 p-2.5 rounded-lg text-[11px] text-emerald-200 leading-relaxed font-sans">
-                    <strong>✅ 1-Click Hot Patch Applied!</strong><br />
-                    કોઈ પણ પ્રકારની .exe ફાઇલ ફરીથી ડાઉનલોડ કે ઇન્સ્ટોલ કરવાની જરૂર નથી. નીચેના બટન પર ક્લિક કરવાથી સૉફ્ટવેર તરત નવો કોડ લોડ કરી લેશે.
+                    <strong>✅ Software Update Ready!</strong><br />
+                    The update package has been downloaded successfully. Click below to restart and complete installation.
                   </div>
                   <button
-                    onClick={() => {
-                      setIsUpdateModalOpen(false);
-                      try {
-                        sessionStorage.clear();
-                        if ('caches' in window) {
-                          caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
-                        }
-                      } catch (e) {}
-                      window.location.href = window.location.origin + window.location.pathname + '?hotpatch=' + Date.now();
-                    }}
+                    onClick={handleRestartAndInstall}
                     className="w-full py-2.5 bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-black text-xs rounded-xl shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer transform hover:scale-[1.02] active:scale-95"
                   >
-                    <RefreshCw className="w-4 h-4 text-black animate-spin" />
-                    <span>APPLY HOT PATCH & RELOAD NOW (EXE#{installedRunNumber})</span>
+                    <RefreshCw className="w-4 h-4 text-black" />
+                    <span>RESTART & INSTALL UPDATE</span>
                   </button>
                 </div>
               )}

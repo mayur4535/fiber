@@ -64,24 +64,16 @@ class ESP32CommunicationService {
   private webSocket: WebSocket | null = null;
   private isRealHardwareConnected: boolean = false;
   private connectionLogListeners: Set<(log: string) => void> = new Set();
+  private lastPongTime: number = 0;
+  private heartbeatInterval: any = null;
+  private helloAckListeners: Set<(ack: any) => void> = new Set();
 
   constructor() {
-    // Start periodic status heartbeats for live temperature drift & hardware telemetry
-    setInterval(() => {
-      if (this.status.connected) {
-        if (!this.status.deviceTemperatureC || this.status.deviceTemperatureC <= 0) {
-          this.status.deviceTemperatureC = Number((31.2 + Math.random() * 0.6).toFixed(1));
-        } else {
-          // Normal active operational thermal variation (e.g., 30.5 to 32.5 °C)
-          const delta = (Math.random() * 0.4 - 0.2);
-          this.status.deviceTemperatureC = Number(Math.max(25, Math.min(45, this.status.deviceTemperatureC + delta)).toFixed(1));
-        }
-        if (!this.status.batteryLevelPercent) {
-          this.status.batteryLevelPercent = 98;
-        }
-        this.notifyStatus();
-      }
-    }, 3000);
+    // Hardware communication service initialized
+  }
+
+  public getIsRealHardwareConnected(): boolean {
+    return this.isRealHardwareConnected;
   }
 
   public subscribeLogs(listener: (log: string) => void): () => void {
@@ -92,6 +84,82 @@ class ESP32CommunicationService {
   private logConnection(log: string): void {
     localDB.log('INFO', 'ESP32 Hardware', log);
     this.connectionLogListeners.forEach(fn => fn(log));
+  }
+
+  // --- REAL ESP32 HANDSHAKE & HEARTBEAT ENGINE ---
+
+  private async performHardwareHandshake(connectionType: ESP32Status['connectionType'] = 'USB Serial', portNameStr: string = 'COM8'): Promise<boolean> {
+    this.logConnection('⚡ Sending handshake query [HELLO?] to ESP32 hardware...');
+
+    return new Promise<boolean>((resolve, reject) => {
+      let resolved = false;
+
+      const unsubAck = (ackData?: any) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
+
+        this.status.connected = true;
+        this.status.connectionType = connectionType;
+        this.status.portName = portNameStr;
+        this.status.deviceName = ackData?.device || 'FSDP-ESP32-S3';
+        this.status.firmwareVersion = ackData?.firmware || 'FSDP_TEST_3.0';
+        this.status.hardwareVersion = ackData?.device || 'ESP32-S3-WROOM';
+        this.status.serialNumber = ackData?.uid || 'UNKNOWN_UID';
+        this.isRealHardwareConnected = true;
+        this.lastPongTime = Date.now();
+        this.notifyStatus();
+
+        this.logConnection(`🟢 REAL ESP32 VERIFIED: ${this.status.deviceName} (FW: ${this.status.firmwareVersion}, UID: ${this.status.serialNumber})`);
+
+        // Start PING / PONG Heartbeat Monitor
+        this.startHeartbeatMonitor();
+        resolve(true);
+      };
+
+      const timeout = setTimeout(async () => {
+        if (resolved) return;
+        resolved = true;
+        unsubAck();
+        this.logConnection('🔴 ESP32 NOT VERIFIED: Handshake timeout. ESP32 did not respond with HELLO_ACK.');
+        await this.disconnectHardware();
+        reject(new Error('ESP32 not detected or handshake failed. Please connect the correct ESP32-S3 hardware.'));
+      }, 4000);
+
+      this.helloAckListeners.add(unsubAck);
+
+      // Send HELLO? to real ESP32
+      this.writeToHardware('HELLO?\n').catch((err) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timeout);
+        this.helloAckListeners.delete(unsubAck);
+        this.disconnectHardware();
+        reject(new Error(`Failed to transmit HELLO? to hardware: ${err.message || err}`));
+      });
+    });
+  }
+
+  private startHeartbeatMonitor(): void {
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+
+    this.heartbeatInterval = setInterval(() => {
+      if (!this.status.connected || !this.isRealHardwareConnected) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+        return;
+      }
+
+      const elapsedMs = Date.now() - this.lastPongTime;
+      if (elapsedMs > 10000) {
+        this.logConnection('❌ ESP32 CONNECTION LOST: Heartbeat PONG timeout (>10s). Disconnecting...');
+        this.disconnectHardware();
+        return;
+      }
+
+      // Send heartbeat PING to ESP32
+      this.writeToHardware('PING\n').catch(() => {});
+    }, 3000);
   }
 
   // --- REAL WEB SERIAL API (USB COM PORT) INTEGRATION ---
@@ -124,18 +192,14 @@ class ESP32CommunicationService {
       await port.open({ baudRate });
 
       this.serialPort = port;
-      this.status.connected = true;
-      this.status.connectionType = 'USB Serial';
-      this.status.portName = `USB Serial (${baudRate} Baud)`;
       this.status.baudRate = baudRate;
-      this.status.deviceTemperatureC = this.status.deviceTemperatureC || 31.2;
-      this.status.batteryLevelPercent = 98;
-      this.isRealHardwareConnected = true;
-      this.notifyStatus();
+      this.status.portName = `USB Serial (${baudRate} Baud)`;
 
-      this.logConnection(`✅ Connected to USB Serial Port successfully! Starting stream reader...`);
+      this.logConnection(`✅ COM Port opened. Starting stream reader and verifying ESP32 hardware handshake...`);
       this.startSerialReader(port);
-      return true;
+
+      // MANDATORY HANDSHAKE: Send HELLO? and wait for HELLO_ACK
+      return await this.performHardwareHandshake('USB Serial', `USB Serial (${baudRate} Baud)`);
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
@@ -191,18 +255,14 @@ class ESP32CommunicationService {
       }
 
       this.serialPort = port;
-      this.status.connected = true;
-      this.status.connectionType = 'USB Serial';
-      this.status.portName = `USB Serial (${baudRate} Baud)`;
       this.status.baudRate = baudRate;
-      this.status.deviceTemperatureC = this.status.deviceTemperatureC || 31.2;
-      this.status.batteryLevelPercent = 98;
-      this.isRealHardwareConnected = true;
-      this.notifyStatus();
+      this.status.portName = `USB Serial (${baudRate} Baud)`;
 
-      this.logConnection(`✅ Connected to USB Serial Port successfully! Starting stream reader...`);
+      this.logConnection(`✅ COM Port opened. Starting stream reader and verifying ESP32 hardware handshake...`);
       this.startSerialReader(port);
-      return true;
+
+      // MANDATORY HANDSHAKE: Send HELLO? and wait for HELLO_ACK
+      return await this.performHardwareHandshake('USB Serial', `USB Serial (${baudRate} Baud)`);
     } catch (err: any) {
       const msg = err.message || String(err);
       if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
@@ -223,7 +283,7 @@ class ESP32CommunicationService {
       const decoder = new TextDecoder();
       let buffer = '';
 
-      while (this.status.connected && this.serialReader === reader) {
+      while (this.serialPort && this.serialReader === reader) {
         const { value, done } = await reader.read();
         if (done) {
           break;
@@ -270,16 +330,16 @@ class ESP32CommunicationService {
           reject(new Error(`WebSocket connection timeout at ${wsUrl}`));
         }, 3500);
 
-        ws.onopen = () => {
+        ws.onopen = async () => {
           clearTimeout(connectionTimeout);
           this.webSocket = ws;
-          this.status.connected = true;
-          this.status.connectionType = 'Wi-Fi WebSocket';
-          this.status.portName = `Wi-Fi (${ipAddress}:${port})`;
-          this.isRealHardwareConnected = true;
-          this.notifyStatus();
-          this.logConnection(`✅ Connected to ESP32 Wi-Fi WebSocket at ${wsUrl}`);
-          resolve(true);
+          this.logConnection(`✅ WebSocket stream opened at ${wsUrl}. Verifying ESP32 hardware handshake...`);
+          try {
+            await this.performHardwareHandshake('Wi-Fi WebSocket', `Wi-Fi (${ipAddress}:${port})`);
+            resolve(true);
+          } catch (err) {
+            reject(err);
+          }
         };
 
         ws.onmessage = (event) => {
@@ -408,6 +468,27 @@ class ESP32CommunicationService {
   private parseAndEmitHardwareLine(line: string) {
     try {
       const cleanLine = line.trim();
+
+      // Handshake Response: HELLO_ACK:{"device":"FSDP-ESP32-S3","protocol":"FSDP-3.0","firmware":"FSDP_TEST_3.0","uid":"<UID>"}
+      if (cleanLine.includes('HELLO_ACK:')) {
+        try {
+          const jsonStr = cleanLine.substring(cleanLine.indexOf('HELLO_ACK:') + 10).trim();
+          const ackObj = JSON.parse(jsonStr);
+          this.logConnection(`✅ ESP32 Handshake Response Received: ${cleanLine}`);
+          this.lastPongTime = Date.now();
+          this.helloAckListeners.forEach(fn => fn(ackObj));
+          return;
+        } catch (err) {
+          this.logConnection(`❌ ESP32 HELLO_ACK parse error: ${err}`);
+        }
+      }
+
+      // Heartbeat Response: PONG
+      if (cleanLine === 'PONG' || cleanLine.includes('PONG')) {
+        this.lastPongTime = Date.now();
+        this.logConnection(`💓 ESP32 Heartbeat: PONG received`);
+        return;
+      }
 
       // Handle Hardware Switch Events (GPIO5 Capture & GPIO6 Next)
       if (cleanLine === 'EVENT:CAPTURE' || cleanLine.includes('EVENT:CAPTURE')) {
@@ -618,82 +699,31 @@ class ESP32CommunicationService {
 
   // --- COMMAND INTERFACE (CMD DICTIONARY) ---
 
-  public async connectDevice(portName: string = 'COM3'): Promise<boolean> {
+  public async connectDevice(portName: string = 'COM8'): Promise<boolean> {
     localDB.log('COMMAND', 'ESP32 Serial', `Initiating connection to ${portName}...`);
-    
-    // Check Web Serial if available in browser
-    if ('serial' in navigator && (navigator as any).serial) {
-      try {
-        const port = await (navigator as any).serial.requestPort();
-        await port.open({ baudRate: this.status.baudRate });
-        this.status.connectionType = 'USB Serial';
-        this.status.portName = portName;
-        this.status.connected = true;
-        this.notifyStatus();
-        localDB.log('INFO', 'ESP32 Serial', 'Web Serial connection opened successfully.');
-        return true;
-      } catch (err: any) {
-        localDB.log('WARN', 'ESP32 Serial', `Web Serial port selection cancelled/failed. Falling back to internal Industrial Hardware Driver. ${err.message}`);
-      }
-    }
-
-    // Connect via high-fidelity internal driver
-    await new Promise((res) => setTimeout(res, 400));
-    this.status.connected = true;
-    this.status.connectionType = 'Simulated';
-    this.status.portName = portName;
-    this.notifyStatus();
-    this.emitPacket(1001, { status: 'CONNECTED', message: 'ESP32 Master Ack' });
-    return true;
+    return await this.connectWebSerial(this.status.baudRate || 115200);
   }
 
   public async disconnectDevice(): Promise<void> {
-    this.stopCapture();
-    this.status.connected = false;
-    this.notifyStatus();
+    await this.disconnectHardware();
     localDB.log('INFO', 'ESP32 Serial', 'Disconnected from ESP32 device.');
   }
 
   public async sendRawCommand(rawCmd: string): Promise<string> {
-    if (!this.status.connected) throw new Error('ESP32 device not connected');
-    
-    localDB.log('COMMAND', 'ESP32 Raw', `TX -> ${rawCmd}`);
-
-    if (this.isRealHardwareConnected) {
-      await this.writeToHardware(rawCmd);
+    if (!this.status.connected || !this.isRealHardwareConnected) {
+      throw new Error('ESP32 device not connected or handshake not verified.');
     }
     
-    const clean = rawCmd.trim().toUpperCase();
+    localDB.log('COMMAND', 'ESP32 Raw', `TX -> ${rawCmd}`);
+    await this.writeToHardware(rawCmd.endsWith('\n') ? rawCmd : `${rawCmd}\n`);
     
+    const clean = rawCmd.trim().toUpperCase();
     if (clean === '<PNG>' || clean === 'PING') {
-      this.emitPacket(1002, { command: '<PNG>' });
-      await new Promise((res) => setTimeout(res, 50));
-      this.emitPacket(1002, { response: '<PNG> PONG', rttMs: 8 });
-      return '<PNG> PONG';
+      return 'PING_SENT';
     }
 
     if (clean === '<CAP>' || clean === 'CAPTURE') {
-      return 'CAPTURE_STARTED';
-    }
-
-    if (clean === '<SAV>') {
-      return 'SAVED_ACK';
-    }
-
-    if (clean === '<NST>') {
-      return 'NEXT_STEP_ACK';
-    }
-
-    if (clean === '<PST>') {
-      return 'PREV_STEP_ACK';
-    }
-
-    if (clean === '<NJT>') {
-      return 'NEXT_JOINT_ACK';
-    }
-
-    if (clean === '<PJT>') {
-      return 'PREV_JOINT_ACK';
+      return 'CAPTURE_COMMAND_SENT';
     }
 
     return 'OK';

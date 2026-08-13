@@ -557,6 +557,18 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   });
   const [simulatedPrevStepPassed, setSimulatedPrevStepPassed] = useState<boolean>(false);
 
+  // Raw 100 Samples Packet State from real ESP32
+  const [rawSamplesData, setRawSamplesData] = useState<{
+    captureId: string;
+    sampleCount: number;
+    readingTime: number;
+    samples: number[];
+    timestamp: string;
+    source: string;
+    deviceUid: string;
+    connectionType: string;
+  } | null>(null);
+
   // Sync current selected joint reading when capturedParams.intensity or selectedJoint changes
   useEffect(() => {
     const liveVal = parseFloat(capturedParams.intensity) || parseFloat(capturedParams.averagePower) || 0;
@@ -815,59 +827,66 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         setHasCaptured(false);
         samplesReceivedRef.current = false;
       } else if (evt.type === 'SAMPLES') {
-        const { samples, reading_time } = evt.payload;
+        const { capture_id, samples, reading_time } = evt.payload;
         if (Array.isArray(samples) && samples.length === 100) {
-          processCapturedSamples(samples, reading_time || 5.0);
+          const validNumSamples = samples.map(s => Number(s));
+          setRawSamplesData({
+            captureId: capture_id || `CAP_${Date.now().toString().slice(-4)}`,
+            sampleCount: validNumSamples.length,
+            readingTime: reading_time || 5.0,
+            samples: validNumSamples,
+            timestamp: new Date().toLocaleTimeString(),
+            source: 'REAL_ESP32',
+            deviceUid: espStatus.serialNumber || 'ESP32-S3-UID',
+            connectionType: espStatus.connectionType
+          });
+          processCapturedSamples(validNumSamples, reading_time || 5.0);
+        } else {
+          alert(`❌ INVALID CAPTURE DATA: ESP32 returned ${samples?.length || 0} samples. Expected exactly 100 samples.`);
+          setIsCapturing(false);
         }
       } else if (evt.type === 'CAPTURE_COMPLETE') {
         setIsCapturing(false);
       }
     });
     return () => unsubCapEvents();
-  }, [processCapturedSamples]);
+  }, [processCapturedSamples, espStatus.serialNumber, espStatus.connectionType]);
 
   const handleCaptureReading = async () => {
     if (isCapturing) return;
+
+    // MANDATORY HARDWARE CHECK: No capture without real connected & verified ESP32
+    const currentEspStatus = esp32Service.getStatus();
+    if (!currentEspStatus.connected || !esp32Service.getIsRealHardwareConnected()) {
+      alert("❌ ESP32 NOT CONNECTED\n\nCannot perform capture because no physical ESP32-S3 hardware is connected and verified.\n\nPlease connect real hardware via USB COM Port or Wi-Fi before capturing.");
+      return;
+    }
+
     setIsCapturing(true);
     setCaptureCountdown(5);
     setHasCaptured(false);
     samplesReceivedRef.current = false;
 
-    // Send ASCII <CAP> command to ESP32
+    const capId = `TEST00${captureSequenceIndex + 1}`;
+    setCaptureSequenceIndex((idx) => idx + 1);
+
+    // Send CAPTURE:<capture_id> command to real ESP32
     try {
-      await esp32Service.sendRawCommand('<CAP>');
-    } catch (e) {
-      console.warn('ESP32 command failed:', e);
+      await esp32Service.sendRawCommand(`CAPTURE:${capId}`);
+    } catch (e: any) {
+      alert(`ESP32 Capture Transmission Failed: ${e.message || e}`);
+      setIsCapturing(false);
+      return;
     }
 
     const timer = setInterval(() => {
       setCaptureCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          // If real SAMPLES were not received over hardware stream, generate 100 test samples
+          // Protection: If 100 raw samples were not received over hardware, stop capture
           if (!samplesReceivedRef.current) {
-            let testSamples: number[] = [];
-
-            if (activeFault === 'Case1_SourceDamaged' || activeFault === 'FiberBreak') {
-              testSamples = Array(100).fill(0.0);
-            } else if (activeFault === 'PumpDegradation') {
-              const baseP = activeModel.ratedPowerW || 23.5;
-              const dropVal = baseP * 0.715;
-              testSamples = Array(100).fill(0).map((_, i) => i % 2 === 0 ? dropVal * 0.96 : dropVal * 1.02);
-            } else {
-              // Standard test sequence: Capture 1 = 10.00 (9 & 11), Capture 2 = 11.00 (10 & 12), Capture 3 = 12.00 (11 & 13)
-              const baseAvg = 10.0 + captureSequenceIndex;
-              const minVal = baseAvg - 1.0;
-              const maxVal = baseAvg + 1.0;
-
-              for (let i = 0; i < 100; i++) {
-                testSamples.push(i % 2 === 0 ? minVal : maxVal);
-              }
-
-              setCaptureSequenceIndex((idx) => idx + 1);
-            }
-
-            processCapturedSamples(testSamples, 5.0);
+            setIsCapturing(false);
+            alert("❌ CAPTURE TIMEOUT: Real ESP32 did not transmit 100 SAMPLES packet within 5 seconds.");
           }
           return 0;
         }
@@ -1564,6 +1583,78 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                 </table>
               </div>
             </div>
+
+            {/* RAW CAPTURE DATA PANEL (100 RAW SAMPLES STREAM DISPLAY) */}
+            {rawSamplesData && (
+              <div className="bg-[#0A1224] border border-cyan-500/40 rounded-lg p-2.5 space-y-2 font-mono shadow-xl text-xs shrink-0">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cyan-800/60 pb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1 bg-cyan-950 border border-cyan-500/50 rounded text-cyan-300 font-bold">
+                      📊 RAW DATA
+                    </span>
+                    <span className="font-black text-amber-300 text-xs uppercase tracking-wide">
+                      RAW 100 SAMPLES CAPTURE DATA
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-500 text-emerald-300 text-[10px] font-bold">
+                      🟢 100 / 100 VALIDATED
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-300">
+                    <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                      ID: <strong className="text-cyan-300">{rawSamplesData.captureId}</strong>
+                    </span>
+                    <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                      UID: <strong className="text-amber-300">{rawSamplesData.deviceUid}</strong>
+                    </span>
+                    <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                      Link: <strong className="text-emerald-300">{rawSamplesData.connectionType}</strong>
+                    </span>
+                    <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                      Time: <strong className="text-white">{rawSamplesData.timestamp}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Arithmetic Summary Bar */}
+                <div className="grid grid-cols-4 gap-2 bg-slate-950 p-2 rounded border border-slate-800 text-[11px] text-center">
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-bold">Total Samples</span>
+                    <span className="font-extrabold text-cyan-300">{rawSamplesData.sampleCount}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-bold">Arithmetic Avg</span>
+                    <span className="font-extrabold text-amber-300">
+                      {(rawSamplesData.samples.reduce((a, b) => a + b, 0) / rawSamplesData.sampleCount).toFixed(2)} W
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-bold">Min Sample</span>
+                    <span className="font-extrabold text-emerald-400">{Math.min(...rawSamplesData.samples).toFixed(2)} W</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[9px] uppercase font-bold">Max Sample</span>
+                    <span className="font-extrabold text-rose-400">{Math.max(...rawSamplesData.samples).toFixed(2)} W</span>
+                  </div>
+                </div>
+
+                {/* 100 Samples Grid Stream Display */}
+                <div className="max-h-32 overflow-y-auto bg-slate-950/80 p-2 rounded border border-slate-800">
+                  <div className="grid grid-cols-5 sm:grid-cols-10 gap-1 text-[10px] font-mono">
+                    {rawSamplesData.samples.map((val, idx) => (
+                      <div
+                        key={`sample-${idx}`}
+                        className="bg-slate-900 border border-slate-800 p-1 rounded text-center hover:border-cyan-500 transition-colors"
+                        title={`Sample #${idx + 1}: ${val.toFixed(2)} W`}
+                      >
+                        <span className="text-[8px] text-slate-500 block font-bold">#{idx + 1}</span>
+                        <span className="font-bold text-cyan-300">{val.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* BUTTON TO OPEN DIAGNOSIS ENGINE MODAL */}
             <div className="flex flex-wrap items-center justify-between gap-2 bg-[#0a1226] border border-cyan-500/50 p-2.5 rounded-xl shadow-lg font-mono">
