@@ -494,8 +494,8 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const stepTotal = activeCycle?.steps.length || 1;
   const currentStepNum = parseInt(activeStep.stepNum, 10);
 
-  // Helper to extract numeric reference parameter from activeModel or refThresholds
-  const getReferenceParams = (): ReadingParameters => {
+  // Helper to extract numeric reference parameter from activeModel
+  const getReferenceParams = useCallback((): ReadingParameters | null => {
     // Check if activeModel has a module reference saved for selected Joint
     const cycleInModel = activeModel.cycles.find(
       c => c.id === activeCycleId || c.id === activeCycle?.id || c.name.toLowerCase() === activeCycle?.name.toLowerCase()
@@ -505,28 +505,14 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     ) || cycleInModel?.modules[0] || activeModel.cycles[0]?.modules[0];
 
     const jointKey = selectedJoint.toLowerCase() as 'before' | 'upper' | 'after';
-    const savedJointParams = moduleInModel?.reference?.[jointKey]?.parameters
-      || moduleInModel?.reference?.before?.parameters
-      || moduleInModel?.reference?.upper?.parameters
-      || moduleInModel?.reference?.after?.parameters;
+    const savedJointParams = moduleInModel?.reference?.[jointKey]?.parameters;
 
-    if (savedJointParams) {
+    if (savedJointParams && typeof savedJointParams.averagePower === 'number') {
       return savedJointParams;
     }
 
-    // Default reference parameters scaled by model rated power
-    const baseP = activeModel.ratedPowerW || 23.5;
-    return {
-      intensity: 100,
-      averagePower: baseP,
-      loss: 1.5,
-      stability: 98.5,
-      minimum: Number((baseP * 0.97).toFixed(2)),
-      maximum: Number((baseP * 1.03).toFixed(2)),
-      tolerance: 2.0,
-      readingTime: 5.0
-    };
-  };
+    return null;
+  }, [activeModel, activeCycleId, activeCycle, activeStepId, activeStep, selectedJoint]);
 
   // Live Captured parameters (7 required metrics)
   const [capturedParams, setCapturedParams] = useState<{
@@ -607,7 +593,48 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     });
   };
 
-  const refParamsNum = getReferenceParams();
+  const savedRefParams = getReferenceParams();
+  const hasSavedReference = savedRefParams !== null;
+
+  const refParamsNum: ReadingParameters = savedRefParams || {
+    intensity: 0,
+    averagePower: 0,
+    loss: 0,
+    stability: 0,
+    minimum: 0,
+    maximum: 0,
+    tolerance: 0,
+    readingTime: 5.0
+  };
+
+  // Keep refThresholds synced with current saved model reference
+  useEffect(() => {
+    const ref = getReferenceParams();
+    if (ref) {
+      const p = ref.averagePower ?? ref.intensity;
+      setRefThresholds({
+        intensity: `${p.toFixed(2)} W`,
+        averagePower: `${p.toFixed(2)} W`,
+        loss: `${(ref.loss ?? 0).toFixed(2)} %`,
+        stability: `${(ref.stability ?? 100).toFixed(2)} %`,
+        minimum: `${(ref.minimum ?? p * 0.97).toFixed(2)} W`,
+        maximum: `${(ref.maximum ?? p * 1.03).toFixed(2)} W`,
+        tolerance: `${(ref.tolerance ?? 0).toFixed(2)} %`,
+        readingTime: `${(ref.readingTime ?? 5.0).toFixed(2)} s`
+      });
+    } else {
+      setRefThresholds({
+        intensity: 'Ref N/A',
+        averagePower: 'Ref N/A',
+        loss: 'Ref N/A',
+        stability: 'Ref N/A',
+        minimum: 'Ref N/A',
+        maximum: 'Ref N/A',
+        tolerance: 'Ref N/A',
+        readingTime: '5.00 s'
+      });
+    }
+  }, [getReferenceParams]);
 
   // Convert string inputs to ReadingParameters for Rules Engine
   const liveParamsNum: ReadingParameters = {
@@ -637,14 +664,28 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     reference: { isComplete: true, status: 'Complete' }
   };
 
+  // Helper to extract reference power for a given joint from model
+  const getJointRefPower = (joint: 'Before' | 'Upper' | 'After'): number => {
+    const cycleInModel = activeModel.cycles.find(
+      c => c.id === activeCycleId || c.id === activeCycle?.id || c.name.toLowerCase() === activeCycle?.name.toLowerCase()
+    );
+    const moduleInModel = cycleInModel?.modules.find(
+      m => m.id === activeStepId || m.id === activeStep?.id || m.name.toLowerCase() === activeStep?.name.toLowerCase()
+    ) || cycleInModel?.modules[0] || activeModel.cycles[0]?.modules[0];
+
+    const jKey = joint.toLowerCase() as 'before' | 'upper' | 'after';
+    const params = moduleInModel?.reference?.[jKey]?.parameters;
+    return params ? (params.averagePower ?? params.intensity) : 0;
+  };
+
   // Construct 3-Joint readings for 4 Master Fault Cases
   const stepJointReadings = {
     beforeLive: jointReadings.Before,
-    beforeRef: parseFloat(refThresholds.intensity) || 12.0,
+    beforeRef: getJointRefPower('Before'),
     upperLive: jointReadings.Upper,
-    upperRef: parseFloat(refThresholds.intensity) || 12.0,
+    upperRef: getJointRefPower('Upper'),
     afterLive: jointReadings.After,
-    afterRef: parseFloat(refThresholds.intensity) || 12.0
+    afterRef: getJointRefPower('After')
   };
 
   // Determine if previous step passed for Case 4 (Mid-Path Interruption) evaluation
@@ -787,18 +828,25 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     const stabilityVal = avg > 0 ? Math.max(0, Math.min(100, 100 * (1 - range / (2 * avg)))) : 0;
 
     // 14 & 15. Optical Loss and Tolerance calculated against baseline reference
-    const refIntensity = parseFloat(refThresholds.intensity) || 100;
-    const lossVal = Math.max(0, ((refIntensity - avg) / (refIntensity || 1)) * 100);
-    const toleranceVal = Math.abs(((avg - refIntensity) / (refIntensity || 1)) * 100);
+    const savedRef = getReferenceParams();
+    const hasSavedRef = savedRef !== null;
+    const refPower = hasSavedRef ? (savedRef.averagePower ?? savedRef.intensity) : 0;
+
+    let lossVal = 0;
+    let toleranceVal = 0;
+    if (hasSavedRef && refPower > 0) {
+      lossVal = Math.max(0, ((refPower - avg) / (refPower || 1)) * 100);
+      toleranceVal = Math.abs(((avg - refPower) / (refPower || 1)) * 100);
+    }
 
     const newParams = {
       intensity: `${avg.toFixed(2)} %`,
       averagePower: `${avg.toFixed(2)} W`,
-      loss: `${lossVal.toFixed(2)} %`,
+      loss: hasSavedRef ? `${lossVal.toFixed(2)} %` : 'Ref N/A',
       stability: `${stabilityVal.toFixed(2)} %`,
       minimum: `${minVal.toFixed(2)} W`,
       maximum: `${maxVal.toFixed(2)} W`,
-      tolerance: `${toleranceVal.toFixed(2)} %`,
+      tolerance: hasSavedRef ? `${toleranceVal.toFixed(2)} %` : 'Ref N/A',
       readingTime: `${readingTimeSec.toFixed(2)} s`
     };
 
@@ -816,7 +864,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       ...prev,
       [selectedJoint]: avg
     }));
-  }, [selectedJoint, refThresholds.intensity, activeCycleId, activeStepId]);
+  }, [selectedJoint, activeCycleId, activeStepId, activeModel, activeStep, activeCycle, getReferenceParams]);
 
   // Subscribe to ESP32 Hardware Capture Protocol Events
   useEffect(() => {
