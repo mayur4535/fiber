@@ -66,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
         (window as any).ipcRenderer.send('check-for-updates');
       } else {
         try {
-          const res = await fetch('https://api.github.com/repos/mayur4535/FiberSourceDiagnosticPro/releases/latest');
+          const res = await fetch('https://api.github.com/repos/mayur4535/fiber/releases/latest');
           if (res.ok) {
             const data = await res.json();
             const latestTag = (data.tag_name || '').replace(/^v/, '');
@@ -137,7 +137,7 @@ export const Header: React.FC<HeaderProps> = ({
     } else if (updateInfo?.downloadUrl) {
       window.open(updateInfo.downloadUrl, '_blank');
     } else {
-      window.open('https://github.com/mayur4535/FiberSourceDiagnosticPro/releases', '_blank');
+      window.open('https://github.com/mayur4535/fiber/releases', '_blank');
     }
   };
 
