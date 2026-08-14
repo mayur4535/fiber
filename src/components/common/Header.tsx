@@ -233,7 +233,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center gap-1.5">
               <h1 className="text-xs sm:text-sm font-bold tracking-wide uppercase text-gray-100">
-                Fiber Source Diagnostic Pro
+                MAYUR FIBER DIAGNOSIS
               </h1>
               {/* CURRENT SOFTWARE VERSION DISPLAY */}
               <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 px-1.5 py-0.2 rounded font-mono font-black tracking-wider">

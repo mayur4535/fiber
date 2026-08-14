@@ -1,8 +1,11 @@
 /**
- * Offline Local Storage & IndexedDB / Firebase Sync Service
- * Fiber Source Diagnostic Pro
+ * Single SQLite File Database Engine & Firebase Cloud Sync Service
+ * MAYUR FIBER DIAGNOSIS
  */
 
+import initSqlJs, { Database, SqlJsStatic } from 'sql.js';
+// @ts-ignore
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 import {
   FiberModel,
   DiagnosisReport,
@@ -26,8 +29,12 @@ const STORAGE_KEYS = {
   SETTINGS: 'fsdp_settings_v1',
   CALIBRATION: 'fsdp_calibration_v1',
   LOGS: 'fsdp_logs_v1',
-  PENDING_TEST: 'fsdp_pending_test_v1'
+  PENDING_TEST: 'fsdp_pending_test_v1',
+  SQLITE_BINARY: 'fsdp_sqlite_db_binary',
+  MIGRATED: 'fsdp_migrated_to_sqlite'
 };
+
+const DEFAULT_DB_PATH = 'FiberSourceDiagnosticPro/Data/FSDP_Database.db';
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
@@ -35,20 +42,21 @@ const DEFAULT_SETTINGS: AppSettings = {
   powerUnit: 'W',
   tempUnit: '°C',
   autoBackupEnabled: true,
-  companyName: 'Laser Automation Services',
-  engineerName: 'Rajesh Patel (Lead Service Eng.)',
+  companyName: 'Mayur Laser Diagnostic Services',
+  engineerName: 'Mayur Raval (Lead Engineer)',
   comPort: 'COM3 (ESP32 USB Serial)',
   baudRate: 115200,
   toleranceDefaultPercent: 2.0,
   demoMode: true,
-  storageMode: 'firebase'
+  storageMode: 'local', // Default MUST be Local PC Database (SQLite)
+  dbPath: DEFAULT_DB_PATH
 };
 
 const DEFAULT_CALIBRATION: CalibrationData = {
   id: 'calib-001',
   deviceId: 'ESP32-FSDP-09412',
   calibrationDate: new Date().toISOString(),
-  engineerName: 'Lead Service Engineer',
+  engineerName: 'Mayur Raval',
   powerOffsetW: 0.0,
   powerGainFactor: 1.0,
   tempOffsetC: 0.0,
@@ -63,544 +71,889 @@ export interface SyncResult {
   updatedCount?: number;
 }
 
+// Helper to safely get Node.js 'fs' and 'path' modules if in Electron
+function getNodeFs(): any {
+  if (typeof window !== 'undefined' && (window as any).require) {
+    try {
+      return (window as any).require('fs');
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function getNodePath(): any {
+  if (typeof window !== 'undefined' && (window as any).require) {
+    try {
+      return (window as any).require('path');
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function getNodeElectron(): any {
+  if (typeof window !== 'undefined' && (window as any).require) {
+    try {
+      return (window as any).require('electron');
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
 class LocalDBService {
+  private SQL: SqlJsStatic | null = null;
+  private db: Database | null = null;
+  private isInitialized: boolean = false;
+  private currentDbPath: string = DEFAULT_DB_PATH;
+  private isMissingDbFile: boolean = false;
+  private memoryLogs: SystemLog[] = [];
+
   constructor() {
-    this.initDefaultData();
+    // Asynchronously initialize SQLite engine
+    this.initSQLite().catch((err) => {
+      console.error('SQLite initialization failed:', err);
+    });
   }
 
-  public get<T = any>(key: string): T | null {
+  public async initSQLite(): Promise<void> {
+    if (this.isInitialized) return;
+
     try {
-      const data = localStorage.getItem(`fsdp_${key}`);
-      if (data) return JSON.parse(data);
-    } catch (e) {
-      console.error('Failed to get from localDB:', e);
+      // Load sql.js WASM locally or via reliable CDN fallbacks
+      try {
+        this.SQL = await initSqlJs({
+          locateFile: (file) => {
+            if (file.endsWith('.wasm') && sqlWasmUrl) {
+              return sqlWasmUrl;
+            }
+            return `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`;
+          }
+        });
+      } catch (wasmErr) {
+        console.warn('Local WASM URL init failed, trying cdnjs CDN fallback:', wasmErr);
+        try {
+          this.SQL = await initSqlJs({
+            locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+          });
+        } catch (cdnErr) {
+          console.warn('cdnjs CDN WASM init failed, trying jsdelivr CDN fallback:', cdnErr);
+          try {
+            this.SQL = await initSqlJs({
+              locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`
+            });
+          } catch (e) {
+            console.error('All SQLite WASM initialization attempts failed. Operating in localStorage fallback mode.', e);
+          }
+        }
+      }
+
+      // Load existing setting to get dbPath
+      const savedSettings = this.readSettingsFromFallback();
+      if (savedSettings?.dbPath) {
+        this.currentDbPath = savedSettings.dbPath;
+      }
+
+      // Check if file exists on disk (if in Electron environment)
+      const fs = getNodeFs();
+      const pathModule = getNodePath();
+
+      let loadedBinary: Uint8Array | null = null;
+
+      if (fs && pathModule) {
+        const fullPath = pathModule.isAbsolute(this.currentDbPath) 
+          ? this.currentDbPath 
+          : pathModule.join(process.cwd(), this.currentDbPath);
+
+        if (fs.existsSync(fullPath)) {
+          const buffer = fs.readFileSync(fullPath);
+          loadedBinary = new Uint8Array(buffer);
+          this.isMissingDbFile = false;
+        } else if (savedSettings?.dbPath && savedSettings.dbPath !== DEFAULT_DB_PATH) {
+          // Custom path configured but missing on disk!
+          this.isMissingDbFile = true;
+          console.warn(`[SQLite] Configured database file NOT found at path: ${fullPath}`);
+        }
+      } else {
+        // Web Browser Fallback: read binary from localStorage / IndexedDB
+        const base64Str = localStorage.getItem(STORAGE_KEYS.SQLITE_BINARY);
+        if (base64Str) {
+          try {
+            const binaryString = atob(base64Str);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            loadedBinary = bytes;
+          } catch (e) {
+            console.error('Failed to parse web sqlite binary from localStorage:', e);
+          }
+        }
+      }
+
+      if (loadedBinary && this.SQL) {
+        this.db = new this.SQL.Database(loadedBinary);
+      } else if (this.SQL && !this.isMissingDbFile) {
+        // Create fresh SQLite database instance
+        this.db = new this.SQL.Database();
+      }
+
+      if (this.db) {
+        this.createTablesSchema();
+        this.migrateFromLocalStorageIfNeeded();
+        this.seedDefaultsIfEmpty();
+        this.persistDatabaseToDisk();
+      }
+
+      this.isInitialized = true;
+    } catch (err) {
+      console.error('Error during SQLite initialization:', err);
+      this.isInitialized = true;
     }
-    return null;
   }
 
-  public save<T = any>(key: string, value: T): void {
+  private createTablesSchema(): void {
+    if (!this.db) return;
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS Models (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS GoldenReferences (
+        id TEXT PRIMARY KEY,
+        model_id TEXT,
+        data TEXT NOT NULL,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS LiveTestReadings (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        data TEXT NOT NULL,
+        created_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS ReferenceReadings (
+        id TEXT PRIMARY KEY,
+        model_id TEXT,
+        data TEXT NOT NULL,
+        created_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS DiagnosticReports (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        created_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS Calibration (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS Settings (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS Logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT NOT NULL,
+        level TEXT NOT NULL,
+        module TEXT NOT NULL,
+        message TEXT NOT NULL,
+        details TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS PendingSessions (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at INTEGER
+      );
+    `);
+  }
+
+  private migrateFromLocalStorageIfNeeded(): void {
+    if (!this.db) return;
+    if (localStorage.getItem(STORAGE_KEYS.MIGRATED) === 'true') return;
+
     try {
-      localStorage.setItem(`fsdp_${key}`, JSON.stringify(value));
-    } catch (e) {
-      console.error('Failed to save to localDB:', e);
+      console.log('📦 Starting 1-time Migration from localStorage to SQLite FSDP_Database.db...');
+
+      // 1. Models
+      const legacyModelsStr = localStorage.getItem(STORAGE_KEYS.MODELS);
+      if (legacyModelsStr) {
+        const models: FiberModel[] = JSON.parse(legacyModelsStr);
+        for (const m of models) {
+          this.db.run(
+            'INSERT OR REPLACE INTO Models (id, data, updated_at) VALUES (?, ?, ?)',
+            [m.id, JSON.stringify(m), Date.now()]
+          );
+        }
+      }
+
+      // 2. Reports
+      const legacyReportsStr = localStorage.getItem(STORAGE_KEYS.REPORTS);
+      if (legacyReportsStr) {
+        const reports: DiagnosisReport[] = JSON.parse(legacyReportsStr);
+        for (const r of reports) {
+          this.db.run(
+            'INSERT OR REPLACE INTO DiagnosticReports (id, data, created_at) VALUES (?, ?, ?)',
+            [r.id, JSON.stringify(r), Date.now()]
+          );
+        }
+      }
+
+      // 3. Settings
+      const legacySettingsStr = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+      if (legacySettingsStr) {
+        const settings: AppSettings = JSON.parse(legacySettingsStr);
+        settings.storageMode = 'local';
+        settings.dbPath = settings.dbPath || DEFAULT_DB_PATH;
+        this.db.run(
+          'INSERT OR REPLACE INTO Settings (id, data, updated_at) VALUES (?, ?, ?)',
+          ['app_settings', JSON.stringify(settings), Date.now()]
+        );
+      }
+
+      // 4. Calibration
+      const legacyCalibStr = localStorage.getItem(STORAGE_KEYS.CALIBRATION);
+      if (legacyCalibStr) {
+        const calib: CalibrationData = JSON.parse(legacyCalibStr);
+        this.db.run(
+          'INSERT OR REPLACE INTO Calibration (id, data, updated_at) VALUES (?, ?, ?)',
+          [calib.id || 'calib-001', JSON.stringify(calib), Date.now()]
+        );
+      }
+
+      // Mark migration completed
+      localStorage.setItem(STORAGE_KEYS.MIGRATED, 'true');
+      console.log('✅ SQLite Migration Completed Successfully.');
+    } catch (err) {
+      console.error('Error migrating localStorage to SQLite:', err);
     }
   }
 
-  private initDefaultData(): void {
-    if (!localStorage.getItem(STORAGE_KEYS.MODELS)) {
-      this.saveModels(DEFAULT_FIBER_MODELS);
+  private seedDefaultsIfEmpty(): void {
+    if (!this.db) return;
+
+    // Seed default models if table empty
+    const modelRes = this.db.exec('SELECT COUNT(*) FROM Models');
+    if (modelRes.length === 0 || modelRes[0].values[0][0] === 0) {
+      for (const m of DEFAULT_FIBER_MODELS) {
+        this.db.run(
+          'INSERT OR REPLACE INTO Models (id, data, updated_at) VALUES (?, ?, ?)',
+          [m.id, JSON.stringify(m), Date.now()]
+        );
+      }
     }
-    if (!localStorage.getItem(STORAGE_KEYS.SETTINGS)) {
-      this.saveSettings(DEFAULT_SETTINGS);
+
+    // Seed default settings if empty
+    const settingsRes = this.db.exec('SELECT COUNT(*) FROM Settings');
+    if (settingsRes.length === 0 || settingsRes[0].values[0][0] === 0) {
+      this.db.run(
+        'INSERT OR REPLACE INTO Settings (id, data, updated_at) VALUES (?, ?, ?)',
+        ['app_settings', JSON.stringify(DEFAULT_SETTINGS), Date.now()]
+      );
     }
-    if (!localStorage.getItem(STORAGE_KEYS.CALIBRATION)) {
-      this.saveCalibration(DEFAULT_CALIBRATION);
+
+    // Seed default calibration if empty
+    const calibRes = this.db.exec('SELECT COUNT(*) FROM Calibration');
+    if (calibRes.length === 0 || calibRes[0].values[0][0] === 0) {
+      this.db.run(
+        'INSERT OR REPLACE INTO Calibration (id, data, updated_at) VALUES (?, ?, ?)',
+        [DEFAULT_CALIBRATION.id, JSON.stringify(DEFAULT_CALIBRATION), Date.now()]
+      );
+    }
+  }
+
+  public persistDatabaseToDisk(): void {
+    if (!this.db) return;
+
+    try {
+      const data = this.db.export(); // Uint8Array
+      const fs = getNodeFs();
+      const pathModule = getNodePath();
+
+      if (fs && pathModule) {
+        const fullPath = pathModule.isAbsolute(this.currentDbPath)
+          ? this.currentDbPath
+          : pathModule.join(process.cwd(), this.currentDbPath);
+
+        const dir = pathModule.dirname(fullPath);
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+
+        fs.writeFileSync(fullPath, Buffer.from(data));
+      } else {
+        // Web Browser Fallback: save chunked base64 in localStorage
+        let binaryStr = '';
+        const len = data.byteLength;
+        for (let i = 0; i < len; i++) {
+          binaryStr += String.fromCharCode(data[i]);
+        }
+        localStorage.setItem(STORAGE_KEYS.SQLITE_BINARY, btoa(binaryStr));
+      }
+    } catch (err) {
+      console.error('Failed to persist SQLite database to disk:', err);
     }
   }
 
   // --- MODELS ---
   public getModels(): FiberModel[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.MODELS);
-      if (data) return JSON.parse(data);
-    } catch (e) {
-      console.error('Failed to load models:', e);
+    if (!this.db) {
+      return this.getFallbackModels();
     }
-    return DEFAULT_FIBER_MODELS;
-  }
-
-  public getModelById(id: string): FiberModel | undefined {
-    const models = this.getModels();
-    return models.find((m) => m.id === id);
-  }
-
-  public saveModels(models: FiberModel[]): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.MODELS, JSON.stringify(models));
-      const user = auth.currentUser;
-      const settings = this.getSettings();
-      if (user && settings.storageMode !== 'local') {
-        saveUserDataToCloud(user.uid, 'models', models).catch((err) => console.warn('Cloud sync error for models:', err));
-      }
+      const res = this.db.exec('SELECT data FROM Models');
+      if (res.length === 0) return DEFAULT_FIBER_MODELS;
+      return res[0].values.map((v) => JSON.parse(v[0] as string));
     } catch (e) {
-      console.error('Failed to save models:', e);
+      console.error('Error fetching models from SQLite:', e);
+      return DEFAULT_FIBER_MODELS;
     }
   }
 
   public saveModel(model: FiberModel): void {
-    const models = this.getModels();
-    const idx = models.findIndex((m) => m.id === model.id);
-    const updatedModel = {
-      ...model,
-      modifiedDate: new Date().toISOString()
-    };
-    if (idx >= 0) {
-      models[idx] = updatedModel;
-    } else {
-      models.push({
-        ...updatedModel,
-        createdDate: new Date().toISOString()
-      });
+    model.modifiedDate = new Date().toISOString();
+    if (!this.db) {
+      this.saveFallbackModel(model);
+      return;
     }
-    this.saveModels(models);
+    try {
+      this.db.run(
+        'INSERT OR REPLACE INTO Models (id, data, updated_at) VALUES (?, ?, ?)',
+        [model.id, JSON.stringify(model), Date.now()]
+      );
+      this.persistDatabaseToDisk();
+    } catch (e) {
+      console.error('Error saving model to SQLite:', e);
+    }
+  }
+
+  public saveModels(models: FiberModel[]): void {
+    for (const m of models) {
+      this.saveModel(m);
+    }
   }
 
   public deleteModel(id: string): void {
-    const models = this.getModels().filter((m) => m.id !== id);
-    this.saveModels(models);
+    if (!this.db) return;
+    try {
+      this.db.run('DELETE FROM Models WHERE id = ?', [id]);
+      this.persistDatabaseToDisk();
+    } catch (e) {
+      console.error('Error deleting model from SQLite:', e);
+    }
   }
 
-  // --- REPORTS & TEST HISTORY ---
+  // --- REPORTS ---
   public getReports(): DiagnosisReport[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.REPORTS);
-      if (data) return JSON.parse(data);
-    } catch (e) {
-      console.error('Failed to load reports:', e);
+    if (!this.db) {
+      return this.getFallbackReports();
     }
-    return [];
+    try {
+      const res = this.db.exec('SELECT data FROM DiagnosticReports ORDER BY created_at DESC');
+      if (res.length === 0) return [];
+      return res[0].values.map((v) => JSON.parse(v[0] as string));
+    } catch (e) {
+      console.error('Error fetching reports from SQLite:', e);
+      return this.getFallbackReports();
+    }
   }
 
   public saveReport(report: DiagnosisReport): void {
-    const reports = this.getReports();
-    const idx = reports.findIndex((r) => r.id === report.id);
-    if (idx >= 0) {
-      reports[idx] = report;
-    } else {
-      reports.unshift(report);
+    if (!this.db) {
+      this.saveFallbackReport(report);
+      return;
     }
     try {
-      localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
-      this.log('INFO', 'Report Saved', `Saved diagnostic report ${report.id}`);
+      this.db.run(
+        'INSERT OR REPLACE INTO DiagnosticReports (id, data, created_at) VALUES (?, ?, ?)',
+        [report.id, JSON.stringify(report), Date.now()]
+      );
+      this.persistDatabaseToDisk();
 
-      const user = auth.currentUser;
-      const currentSettings = this.getSettings();
-      if (currentSettings.storageMode !== 'local') {
-        if (user) {
-          saveUserDataToCloud(user.uid, 'reports', reports).catch((err) => console.warn('Cloud sync error for reports:', err));
-        }
-        saveTestLogToCloud({
-          timestamp: report.timestamp,
-          cableId: report.machineId || report.serialNumber || 'Fiber-Source-Cable',
-          fiberIndex: 1,
-          lossDb: report.healthScore,
-          status: report.overallStatus,
-          operator: report.engineerName,
-          notes: JSON.stringify({
-            brand: report.brand,
-            modelName: report.modelName,
-            primaryFaultLocation: report.primaryFaultLocation,
-            evidenceSummary: report.evidenceSummary
-          })
-        }).catch((err) => console.warn('Cloud sync error for test log:', err));
+      if (this.getSettings().storageMode === 'firebase') {
+        saveTestLogToCloud(report).catch(() => {});
       }
     } catch (e) {
-      console.error('Failed to save report:', e);
+      console.error('Error saving report to SQLite:', e);
+      this.saveFallbackReport(report);
     }
   }
 
   public deleteReport(id: string): void {
-    const reports = this.getReports().filter((r) => r.id !== id);
-    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
-    const user = auth.currentUser;
-    const settings = this.getSettings();
-    if (user && settings.storageMode !== 'local') {
-      saveUserDataToCloud(user.uid, 'reports', reports).catch((err) => console.warn('Cloud sync error for reports:', err));
+    if (!this.db) return;
+    try {
+      this.db.run('DELETE FROM DiagnosticReports WHERE id = ?', [id]);
+      this.persistDatabaseToDisk();
+    } catch (e) {
+      console.error('Error deleting report from SQLite:', e);
     }
   }
 
-  // --- PENDING TEST (AUTO-SAVE & RECOVERY) ---
+  // --- PENDING SESSIONS ---
   public getPendingTests(): PendingTestSession[] {
+    if (!this.db) return [];
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.PENDING_TEST);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-        if (parsed && typeof parsed === 'object') return [parsed];
-      }
+      const res = this.db.exec('SELECT data FROM PendingSessions');
+      if (res.length === 0) return [];
+      return res[0].values.map((v) => JSON.parse(v[0] as string));
     } catch (e) {
-      console.error('Failed to load pending tests list:', e);
+      return [];
     }
-    return [];
   }
 
   public getPendingTest(id?: string): PendingTestSession | null {
     const list = this.getPendingTests();
     if (list.length === 0) return null;
     if (id) {
-      return list.find(s => s.id === id) || null;
+      return list.find((s) => s.id === id) || null;
     }
     return list[0];
   }
 
   public savePendingTest(session: PendingTestSession): void {
+    if (!this.db) return;
     try {
-      const list = this.getPendingTests();
-      const idx = list.findIndex(s => s.id === session.id || s.serialNumber === session.serialNumber);
-      if (idx >= 0) {
-        list[idx] = session;
-      } else {
-        list.unshift(session);
-      }
-      localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(list));
-      const user = auth.currentUser;
-      const settings = this.getSettings();
-      if (user && settings.storageMode !== 'local') {
-        saveUserDataToCloud(user.uid, 'pendingTests', list).catch((err) => console.warn('Cloud sync error for pending tests:', err));
-      }
+      this.db.run(
+        'INSERT OR REPLACE INTO PendingSessions (id, data, updated_at) VALUES (?, ?, ?)',
+        [session.id, JSON.stringify(session), Date.now()]
+      );
+      this.persistDatabaseToDisk();
     } catch (e) {
-      console.error('Failed to save pending test:', e);
+      console.error('Error saving pending session to SQLite:', e);
     }
   }
 
   public deletePendingTest(id: string): void {
+    if (!this.db) return;
     try {
-      const list = this.getPendingTests().filter(s => s.id !== id && s.serialNumber !== id);
-      localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(list));
+      this.db.run('DELETE FROM PendingSessions WHERE id = ?', [id]);
+      this.persistDatabaseToDisk();
     } catch (e) {
-      console.error('Failed to delete pending test:', e);
+      console.error('Error deleting pending session from SQLite:', e);
     }
   }
 
-  public clearPendingTest(id?: string): void {
+  public clearPendingTest(): void {
+    if (!this.db) return;
     try {
-      if (id) {
-        this.deletePendingTest(id);
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.PENDING_TEST);
-      }
+      this.db.run('DELETE FROM PendingSessions');
+      this.persistDatabaseToDisk();
     } catch (e) {
-      console.error('Failed to clear pending test:', e);
+      console.error('Error clearing pending sessions from SQLite:', e);
     }
   }
 
   // --- SETTINGS ---
   public getSettings(): AppSettings {
+    if (!this.db) {
+      return this.readSettingsFromFallback() || DEFAULT_SETTINGS;
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (data) return JSON.parse(data);
+      const res = this.db.exec('SELECT data FROM Settings WHERE id = "app_settings"');
+      if (res.length > 0 && res[0].values.length > 0) {
+        const loaded = JSON.parse(res[0].values[0][0] as string) as AppSettings;
+        return {
+          ...DEFAULT_SETTINGS,
+          ...loaded,
+          dbPath: loaded.dbPath || this.currentDbPath,
+          storageMode: loaded.storageMode || 'local'
+        };
+      }
     } catch (e) {
-      console.error('Failed to load settings:', e);
+      console.error('Error fetching settings from SQLite:', e);
     }
     return DEFAULT_SETTINGS;
   }
 
   public saveSettings(settings: AppSettings): void {
-    try {
+    if (settings.dbPath) {
+      this.currentDbPath = settings.dbPath;
+    }
+    if (!this.db) {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-      const user = auth.currentUser;
-      if (user && settings.storageMode !== 'local') {
-        saveUserDataToCloud(user.uid, 'settings', settings).catch((err) => console.warn('Cloud sync error for settings:', err));
-        saveSettingsToCloud(settings).catch((err) => console.warn('Cloud sync error for settings:', err));
+      return;
+    }
+    try {
+      this.db.run(
+        'INSERT OR REPLACE INTO Settings (id, data, updated_at) VALUES (?, ?, ?)',
+        ['app_settings', JSON.stringify(settings), Date.now()]
+      );
+      this.persistDatabaseToDisk();
+
+      if (settings.storageMode === 'firebase') {
+        saveSettingsToCloud(settings).catch(() => {});
       }
     } catch (e) {
-      console.error('Failed to save settings:', e);
+      console.error('Error saving settings to SQLite:', e);
     }
   }
 
   // --- CALIBRATION ---
   public getCalibration(): CalibrationData {
+    if (!this.db) return DEFAULT_CALIBRATION;
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.CALIBRATION);
-      if (data) return JSON.parse(data);
+      const res = this.db.exec('SELECT data FROM Calibration LIMIT 1');
+      if (res.length > 0 && res[0].values.length > 0) {
+        return JSON.parse(res[0].values[0][0] as string);
+      }
     } catch (e) {
-      console.error('Failed to load calibration:', e);
+      console.error('Error fetching calibration from SQLite:', e);
     }
     return DEFAULT_CALIBRATION;
   }
 
-  public saveCalibration(calibration: CalibrationData): void {
+  public saveCalibration(cal: CalibrationData): void {
+    if (!this.db) return;
     try {
-      localStorage.setItem(STORAGE_KEYS.CALIBRATION, JSON.stringify(calibration));
-      const user = auth.currentUser;
-      const settings = this.getSettings();
-      if (user && settings.storageMode !== 'local') {
-        saveUserDataToCloud(user.uid, 'calibration', calibration).catch((err) => console.warn('Cloud sync error for calibration:', err));
-      }
+      this.db.run(
+        'INSERT OR REPLACE INTO Calibration (id, data, updated_at) VALUES (?, ?, ?)',
+        [cal.id || 'calib-001', JSON.stringify(cal), Date.now()]
+      );
+      this.persistDatabaseToDisk();
     } catch (e) {
-      console.error('Failed to save calibration:', e);
+      console.error('Error saving calibration to SQLite:', e);
     }
   }
 
   // --- LOGS ---
-  private memoryLogs: SystemLog[] | null = null;
-  private logSaveTimer: any = null;
-
   public getLogs(): SystemLog[] {
-    if (this.memoryLogs) {
-      return [...this.memoryLogs];
-    }
+    if (!this.db) return this.memoryLogs;
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.LOGS);
-      if (data) {
-        this.memoryLogs = JSON.parse(data);
-        return [...(this.memoryLogs || [])];
-      }
+      const res = this.db.exec('SELECT id, timestamp, level, module, message, details FROM Logs ORDER BY id DESC LIMIT 500');
+      if (res.length === 0) return this.memoryLogs;
+      return res[0].values.map((v) => ({
+        id: String(v[0]),
+        timestamp: String(v[1]),
+        level: v[2] as any,
+        category: String(v[3]),
+        message: String(v[4]),
+        details: v[5] ? String(v[5]) : undefined
+      }));
     } catch (e) {
-      console.error('Failed to load logs:', e);
+      return this.memoryLogs;
     }
-    this.memoryLogs = [];
-    return [];
   }
 
-  public log(level: 'INFO' | 'WARN' | 'ERROR' | 'COMMAND', category: string, message: string, details?: string): void {
-    if (!this.memoryLogs) {
-      this.getLogs();
-    }
-    const newLog: SystemLog = {
-      id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+  public log(level: SystemLog['level'], moduleName: string, message: string, details?: any): void {
+    const entry: SystemLog = {
+      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
       level,
-      category,
+      category: moduleName,
       message,
-      details
+      details: details ? (typeof details === 'object' ? JSON.stringify(details) : String(details)) : undefined
     };
-    if (this.memoryLogs) {
-      this.memoryLogs.unshift(newLog);
-      if (this.memoryLogs.length > 300) {
-        this.memoryLogs.pop();
-      }
-    }
 
-    if (!this.logSaveTimer) {
-      this.logSaveTimer = setTimeout(() => {
-        try {
-          if (this.memoryLogs) {
-            localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(this.memoryLogs));
-          }
-        } catch (e) {
-          console.error('Failed to persist logs:', e);
-        } finally {
-          this.logSaveTimer = null;
-        }
-      }, 1000);
+    this.memoryLogs.unshift(entry);
+    if (this.memoryLogs.length > 500) this.memoryLogs.pop();
+
+    if (this.db) {
+      try {
+        this.db.run(
+          'INSERT INTO Logs (timestamp, level, module, message, details) VALUES (?, ?, ?, ?, ?)',
+          [entry.timestamp, entry.level, entry.category, entry.message, entry.details || '']
+        );
+        this.persistDatabaseToDisk();
+      } catch (e) {
+        // Silent catch for rapid log writes
+      }
     }
   }
 
   public clearLogs(): void {
     this.memoryLogs = [];
-    if (this.logSaveTimer) {
-      clearTimeout(this.logSaveTimer);
-      this.logSaveTimer = null;
+    if (!this.db) return;
+    try {
+      this.db.run('DELETE FROM Logs');
+      this.persistDatabaseToDisk();
+    } catch (e) {
+      console.error('Error clearing logs in SQLite:', e);
     }
-    localStorage.removeItem(STORAGE_KEYS.LOGS);
   }
 
-  // --- CLOUD SYNC ENGINE WITH CONFLIC RESOLUTION ---
-  public async syncWithCloud(): Promise<SyncResult> {
-    const settings = this.getSettings();
-    if (settings.storageMode === 'local') {
-      return {
-        success: true,
-        status: 'local_mode',
-        message: 'Local PC Storage active. Cloud sync skipped.'
-      };
+  // --- DATABASE FILE MANAGEMENT & DIALOGS ---
+
+  public getDatabasePath(): string {
+    return this.currentDbPath;
+  }
+
+  public isMissingDatabaseFile(): boolean {
+    return this.isMissingDbFile;
+  }
+
+  public createNewDatabaseAtPath(newPath: string): void {
+    if (!this.SQL) return;
+    this.currentDbPath = newPath;
+    this.db = new this.SQL.Database();
+    this.createTablesSchema();
+    this.seedDefaultsIfEmpty();
+    this.persistDatabaseToDisk();
+    this.isMissingDbFile = false;
+
+    const currentSettings = this.getSettings();
+    this.saveSettings({ ...currentSettings, dbPath: newPath });
+  }
+
+  public locateDatabaseFile(existingPath: string): boolean {
+    const fs = getNodeFs();
+    if (fs && !fs.existsSync(existingPath)) {
+      return false;
     }
 
-    const user = auth.currentUser;
-    if (!user) {
-      return {
-        success: false,
-        status: 'auth_required',
-        message: 'Please log in to Firebase account to sync data.'
-      };
+    this.currentDbPath = existingPath;
+    this.isMissingDbFile = false;
+    this.initSQLite().catch(() => {});
+
+    const currentSettings = this.getSettings();
+    this.saveSettings({ ...currentSettings, dbPath: existingPath });
+    return true;
+  }
+
+  public openDatabaseFolder(): void {
+    const electron = getNodeElectron();
+    const pathModule = getNodePath();
+
+    if (electron && electron.shell && pathModule) {
+      const fullPath = pathModule.isAbsolute(this.currentDbPath)
+        ? this.currentDbPath
+        : pathModule.join(process.cwd(), this.currentDbPath);
+
+      electron.shell.showItemInFolder(fullPath);
+    } else {
+      // Browser fallback: trigger export download
+      this.exportSQLiteDatabaseFile();
+    }
+  }
+
+  // --- FULL DATABASE EXPORT & IMPORT ---
+
+  public exportSQLiteDatabase(): Uint8Array | null {
+    if (!this.db) return null;
+    return this.db.export();
+  }
+
+  public exportSQLiteDatabaseFile(): void {
+    const binary = this.exportSQLiteDatabase();
+    if (!binary) {
+      alert('SQLite database is not initialized.');
+      return;
+    }
+
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = `FSDP_Database_${dateStr}.fsdbackup`;
+
+    const blob = new Blob([binary], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  public importSQLiteDatabase(binaryData: Uint8Array): { success: boolean; message: string } {
+    if (!this.SQL) {
+      return { success: false, message: 'SQLite engine not initialized.' };
     }
 
     try {
-      const cloudData = await fetchAllUserDataFromCloud(user.uid);
-      let updatedCount = 0;
+      // 1. Create automatic safety backup of current database first
+      this.createAutomaticSafetyBackup();
 
-      // 1. Models Sync
-      if (Array.isArray(cloudData.models) && cloudData.models.length > 0) {
-        const localModels = this.getModels();
-        const mergedModelsMap = new Map<string, FiberModel>();
-        localModels.forEach(m => mergedModelsMap.set(m.id, m));
+      // 2. Load new database
+      const newDb = new this.SQL.Database(binaryData);
 
-        cloudData.models.forEach((cloudM: FiberModel) => {
-          const localM = mergedModelsMap.get(cloudM.id);
-          if (!localM) {
-            mergedModelsMap.set(cloudM.id, cloudM);
-            updatedCount++;
-          } else {
-            const cloudDate = new Date(cloudM.modifiedDate || cloudM.createdDate || 0).getTime();
-            const localDate = new Date(localM.modifiedDate || localM.createdDate || 0).getTime();
-            if (cloudDate > localDate) {
-              mergedModelsMap.set(cloudM.id, cloudM);
-              updatedCount++;
-            }
-          }
-        });
-
-        const mergedModels = Array.from(mergedModelsMap.values());
-        localStorage.setItem(STORAGE_KEYS.MODELS, JSON.stringify(mergedModels));
-        saveUserDataToCloud(user.uid, 'models', mergedModels).catch(() => {});
-      } else {
-        const localModels = this.getModels();
-        if (localModels.length > 0) {
-          saveUserDataToCloud(user.uid, 'models', localModels).catch(() => {});
-        }
+      // Verify essential tables exist
+      const checkTables = newDb.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Models'");
+      if (checkTables.length === 0) {
+        return { success: false, message: 'Invalid database backup file. Missing Models table.' };
       }
 
-      // 2. Reports Sync
-      if (Array.isArray(cloudData.reports) && cloudData.reports.length > 0) {
-        const localReports = this.getReports();
-        const mergedReportsMap = new Map<string, DiagnosisReport>();
-        localReports.forEach(r => mergedReportsMap.set(r.id, r));
+      this.db = newDb;
+      this.persistDatabaseToDisk();
 
-        cloudData.reports.forEach((cloudR: DiagnosisReport) => {
-          const localR = mergedReportsMap.get(cloudR.id);
-          if (!localR) {
-            mergedReportsMap.set(cloudR.id, cloudR);
-            updatedCount++;
-          }
-        });
-
-        const mergedReports = Array.from(mergedReportsMap.values());
-        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(mergedReports));
-        saveUserDataToCloud(user.uid, 'reports', mergedReports).catch(() => {});
-      } else {
-        const localReports = this.getReports();
-        if (localReports.length > 0) {
-          saveUserDataToCloud(user.uid, 'reports', localReports).catch(() => {});
-        }
-      }
-
-      // 3. Settings Sync
-      if (cloudData.settings && typeof cloudData.settings === 'object') {
-        const mergedSettings = { ...this.getSettings(), ...cloudData.settings };
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mergedSettings));
-      } else {
-        saveUserDataToCloud(user.uid, 'settings', settings).catch(() => {});
-      }
-
-      // 4. Calibration Sync
-      if (cloudData.calibration && typeof cloudData.calibration === 'object') {
-        const mergedCalibration = { ...this.getCalibration(), ...cloudData.calibration };
-        localStorage.setItem(STORAGE_KEYS.CALIBRATION, JSON.stringify(mergedCalibration));
-      } else {
-        saveUserDataToCloud(user.uid, 'calibration', this.getCalibration()).catch(() => {});
-      }
-
-      this.log('INFO', 'Cloud Sync', `Firebase cloud sync completed successfully. Updated ${updatedCount} records.`);
-
-      return {
-        success: true,
-        status: 'synced',
-        message: 'Firebase Cloud sync complete!',
-        updatedCount
-      };
-    } catch (e: any) {
-      console.error('Firebase cloud sync error:', e);
-      return {
-        success: false,
-        status: 'offline',
-        message: `Firebase Offline / Connection Failed: ${e.message || 'Network error'}`
-      };
+      return { success: true, message: 'SQLite database restored successfully!' };
+    } catch (err: any) {
+      return { success: false, message: `Import failed: ${err.message || err}` };
     }
   }
 
-  // --- VERSIONED BACKUP EXPORT & IMPORT ---
-  public exportFullDatabaseJSON(): string {
-    const exportData = {
-      format: 'FSDP_DATA_EXPORT',
-      schemaVersion: '1.0',
-      exportedAt: new Date().toISOString(),
-      applicationVersion: '3.2.0',
-      data: {
-        models: this.getModels(),
-        reports: this.getReports(),
-        settings: this.getSettings(),
-        calibration: this.getCalibration(),
-        pendingTests: this.getPendingTests(),
-        logs: this.getLogs()
+  private createAutomaticSafetyBackup(): void {
+    if (!this.db) return;
+    try {
+      const binary = this.db.export();
+      const fs = getNodeFs();
+      const pathModule = getNodePath();
+
+      if (fs && pathModule) {
+        const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupPath = pathModule.join(process.cwd(), `FiberSourceDiagnosticPro/Data/SafetyBackup_${dateStr}.fsdbackup`);
+        const dir = pathModule.dirname(backupPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(backupPath, Buffer.from(binary));
+        console.log(`🛡️ Safety backup created at: ${backupPath}`);
       }
+    } catch (e) {
+      console.error('Failed to create safety backup:', e);
+    }
+  }
+
+  // --- JSON EXPORT / IMPORT FOR COMPATIBILITY ---
+  public exportFullDatabaseJSON(): string {
+    const payload = {
+      app: 'MAYUR FIBER DIAGNOSIS',
+      exportDate: new Date().toISOString(),
+      models: this.getModels(),
+      reports: this.getReports(),
+      settings: this.getSettings(),
+      calibration: this.getCalibration(),
+      logs: this.getLogs(),
+      pendingSessions: this.getPendingTests()
     };
-    return JSON.stringify(exportData, null, 2);
+    return JSON.stringify(payload, null, 2);
   }
 
   public importFullDatabaseJSON(jsonStr: string): { success: boolean; message: string } {
     try {
-      if (!jsonStr || typeof jsonStr !== 'string') {
-        return { success: false, message: 'Invalid file format: empty or non-string input.' };
+      const data = JSON.parse(jsonStr);
+      this.createAutomaticSafetyBackup();
+
+      if (Array.isArray(data.models)) this.saveModels(data.models);
+      if (Array.isArray(data.reports)) {
+        for (const r of data.reports) this.saveReport(r);
       }
+      if (data.settings) this.saveSettings(data.settings);
+      if (data.calibration) this.saveCalibration(data.calibration);
 
-      const parsed = JSON.parse(jsonStr);
-
-      // Handle both v1.0 schema format and legacy raw JSON format
-      let modelsData = null;
-      let reportsData = null;
-      let settingsData = null;
-      let calibrationData = null;
-      let pendingData = null;
-
-      if (parsed && parsed.format === 'FSDP_DATA_EXPORT' && parsed.data) {
-        modelsData = parsed.data.models;
-        reportsData = parsed.data.reports;
-        settingsData = parsed.data.settings;
-        calibrationData = parsed.data.calibration;
-        pendingData = parsed.data.pendingTests;
-      } else if (parsed && typeof parsed === 'object') {
-        modelsData = parsed.models;
-        reportsData = parsed.reports;
-        settingsData = parsed.settings;
-        calibrationData = parsed.calibration;
-        pendingData = parsed.pendingTests;
-      } else {
-        return { success: false, message: 'Invalid / Corrupted Backup File: Unrecognized format.' };
-      }
-
-      // Validate models structure if present
-      if (modelsData) {
-        if (!Array.isArray(modelsData)) {
-          return { success: false, message: 'Corrupted Backup: "models" field must be an array.' };
-        }
-        for (const m of modelsData) {
-          if (!m.id || !m.name || !Array.isArray(m.cycles)) {
-            return { success: false, message: 'Corrupted Backup: Invalid FiberModel structure detected.' };
-          }
-        }
-        this.saveModels(modelsData);
-      }
-
-      if (reportsData && Array.isArray(reportsData)) {
-        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reportsData));
-      }
-
-      if (settingsData && typeof settingsData === 'object') {
-        this.saveSettings(settingsData);
-      }
-
-      if (calibrationData && typeof calibrationData === 'object') {
-        this.saveCalibration(calibrationData);
-      }
-
-      if (pendingData && Array.isArray(pendingData)) {
-        localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(pendingData));
-      }
-
-      this.log('INFO', 'Database Import', 'Full database successfully restored from verified backup file.');
-
-      // Trigger cloud sync if in Firebase mode
-      const currentSettings = this.getSettings();
-      if (currentSettings.storageMode !== 'local' && auth.currentUser) {
-        this.syncWithCloud().catch(() => {});
-      }
-
-      return { success: true, message: 'Backup imported successfully! All records restored.' };
-    } catch (e: any) {
-      console.error('Failed to import database:', e);
-      return { success: false, message: `Import Failed: ${e.message || 'Corrupted JSON file'}` };
+      return { success: true, message: 'JSON database imported successfully into SQLite.' };
+    } catch (err: any) {
+      return { success: false, message: `JSON import failed: ${err.message || err}` };
     }
   }
 
   public resetToFactoryDefaults(): void {
-    localStorage.removeItem(STORAGE_KEYS.MODELS);
-    localStorage.removeItem(STORAGE_KEYS.REPORTS);
-    localStorage.removeItem(STORAGE_KEYS.SETTINGS);
-    localStorage.removeItem(STORAGE_KEYS.CALIBRATION);
-    localStorage.removeItem(STORAGE_KEYS.LOGS);
-    localStorage.removeItem(STORAGE_KEYS.PENDING_TEST);
-    this.initDefaultData();
+    if (!this.db) return;
+    try {
+      this.db.run('DELETE FROM Models');
+      this.db.run('DELETE FROM DiagnosticReports');
+      this.db.run('DELETE FROM PendingSessions');
+      this.db.run('DELETE FROM Calibration');
+      this.db.run('DELETE FROM Settings');
+      this.db.run('DELETE FROM Logs');
+      this.seedDefaultsIfEmpty();
+      this.persistDatabaseToDisk();
+      localStorage.clear();
+    } catch (e) {
+      console.error('Error resetting factory defaults:', e);
+    }
+  }
+
+  public async syncWithCloud(firebaseService?: any): Promise<SyncResult> {
+    const settings = this.getSettings();
+    if (settings.storageMode !== 'firebase') {
+      return {
+        success: true,
+        status: 'local_mode',
+        message: 'Storage Mode is set to Local PC Database (SQLite).'
+      };
+    }
+
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      return {
+        success: false,
+        status: 'auth_required',
+        message: 'Firebase authentication required for Cloud Sync. Please log in.'
+      };
+    }
+
+    try {
+      const cloudData = await fetchAllUserDataFromCloud(uid);
+      if (cloudData) {
+        const { models, reports, settings: cloudSettings, calibration } = cloudData;
+        if (models && Array.isArray(models)) this.saveModels(models);
+        if (reports && Array.isArray(reports)) {
+          for (const r of reports) this.saveReport(r);
+        }
+        if (cloudSettings) this.saveSettings(cloudSettings);
+        if (calibration) this.saveCalibration(calibration);
+
+        return {
+          success: true,
+          status: 'synced',
+          message: 'Synced with Firebase Cloud Storage.'
+        };
+      }
+      return {
+        success: false,
+        status: 'error',
+        message: 'Failed to fetch user data from Firebase Cloud.'
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        status: 'error',
+        message: err.message || 'Cloud sync error'
+      };
+    }
+  }
+
+  // --- FALLBACK HELPERS ---
+  private getFallbackModels(): FiberModel[] {
+    const str = localStorage.getItem(STORAGE_KEYS.MODELS);
+    if (str) {
+      try { return JSON.parse(str); } catch (e) {}
+    }
+    return DEFAULT_FIBER_MODELS;
+  }
+
+  private saveFallbackModel(model: FiberModel): void {
+    const list = this.getFallbackModels();
+    const idx = list.findIndex(m => m.id === model.id);
+    if (idx >= 0) list[idx] = model;
+    else list.push(model);
+    localStorage.setItem(STORAGE_KEYS.MODELS, JSON.stringify(list));
+  }
+
+  private getFallbackReports(): DiagnosisReport[] {
+    const str = localStorage.getItem(STORAGE_KEYS.REPORTS);
+    if (str) {
+      try { return JSON.parse(str); } catch (e) {}
+    }
+    return [];
+  }
+
+  private saveFallbackReport(report: DiagnosisReport): void {
+    const list = this.getFallbackReports();
+    const idx = list.findIndex(r => r.id === report.id);
+    if (idx >= 0) list[idx] = report;
+    else list.unshift(report);
+    localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(list));
+  }
+
+  private readSettingsFromFallback(): AppSettings | null {
+    const str = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+    if (str) {
+      try { return JSON.parse(str); } catch (e) {}
+    }
+    return null;
   }
 }
 

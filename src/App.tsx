@@ -46,17 +46,25 @@ export default function App() {
 
   // Initialization
   useEffect(() => {
-    const loadedModels = localDB.getModels();
-    setModels(loadedModels);
-    if (loadedModels.length > 0) {
-      setActiveModel(loadedModels[0]);
+    async function init() {
+      await localDB.initSQLite();
+      const loadedModels = localDB.getModels();
+      setModels(loadedModels);
+      if (loadedModels.length > 0) {
+        setActiveModel(loadedModels[0]);
+      }
+
+      const loadedReports = localDB.getReports();
+      setReports(loadedReports);
+      if (loadedReports.length > 0) {
+        setCurrentReport(loadedReports[0]);
+      }
+
+      setSettings(localDB.getSettings());
+      setCalibration(localDB.getCalibration());
     }
 
-    const loadedReports = localDB.getReports();
-    setReports(loadedReports);
-    if (loadedReports.length > 0) {
-      setCurrentReport(loadedReports[0]);
-    }
+    init();
 
     const unsubEsp = esp32Service.subscribeStatus(setEspStatus);
     return () => unsubEsp();
@@ -75,10 +83,17 @@ export default function App() {
 
   if (!activeModel) {
     return (
-      <div className="min-h-screen bg-[#111827] text-white flex items-center justify-center font-mono">
-        <div className="animate-pulse flex items-center gap-3">
-          <div className="w-4 h-4 bg-orange-500 rounded-full animate-ping" />
-          <span>Initializing Fiber Source Diagnostic Pro Database...</span>
+      <div className="min-h-screen bg-[#111827] text-white flex flex-col items-center justify-center font-mono p-6">
+        <div className="text-center space-y-4 max-w-md">
+          <div className="w-12 h-12 bg-orange-600 rounded-xl mx-auto flex items-center justify-center font-bold text-2xl text-white shadow-lg shadow-orange-900/50">
+            M
+          </div>
+          <h1 className="text-2xl font-bold tracking-wider text-white">MAYUR FIBER DIAGNOSIS</h1>
+          <p className="text-xs text-orange-400 font-semibold uppercase tracking-widest">Developed by Mayur Raval</p>
+          <div className="pt-4 flex items-center justify-center gap-3">
+            <div className="w-3 h-3 bg-orange-500 rounded-full animate-ping" />
+            <span className="text-sm text-gray-400">Loading MAYUR FIBER DIAGNOSIS SQLite Database...</span>
+          </div>
         </div>
       </div>
     );

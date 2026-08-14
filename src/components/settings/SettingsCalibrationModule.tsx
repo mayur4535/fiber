@@ -104,6 +104,12 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
   const [syncResultStatus, setSyncResultStatus] = useState<string | null>(null);
 
+  // SQLite Database Location & Backup Modal States
+  const [showChangeLocationModal, setShowChangeLocationModal] = useState<boolean>(false);
+  const [newDbPathInput, setNewDbPathInput] = useState<string>(localDB.getDatabasePath());
+  const [showImportConfirmModal, setShowImportConfirmModal] = useState<boolean>(false);
+  const [pendingImportBinary, setPendingImportBinary] = useState<Uint8Array | null>(null);
+
   useEffect(() => {
     const unsub = subscribeAuthState((u) => {
       setAuthUser(u);
@@ -380,36 +386,118 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
                 </div>
               </div>
 
-              {/* Option 2: Laptop Local Storage */}
+              {/* Option 2: Local PC Database (SQLite) */}
               <div
                 onClick={() => setLocalSettings({ ...localSettings, storageMode: 'local' })}
                 className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                  localSettings.storageMode === 'local'
+                  (localSettings.storageMode || 'local') === 'local'
                     ? 'bg-emerald-950/40 border-emerald-500 text-white shadow-lg ring-1 ring-emerald-500/50'
                     : 'bg-gray-950/80 border-gray-800 text-gray-400 hover:border-gray-700'
                 }`}
               >
                 <div className={`p-2.5 rounded-lg ${
-                  localSettings.storageMode === 'local' ? 'bg-emerald-500 text-black' : 'bg-gray-800 text-gray-400'
+                  (localSettings.storageMode || 'local') === 'local' ? 'bg-emerald-500 text-black' : 'bg-gray-800 text-gray-400'
                 }`}>
-                  <Laptop className="w-5 h-5" />
+                  <Database className="w-5 h-5" />
                 </div>
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
-                    <span className="font-bold text-xs text-white">2. Laptop Local Storage (EXE / Node.js)</span>
-                    {localSettings.storageMode === 'local' && (
+                    <span className="font-bold text-xs text-white">2. Local PC Database (SQLite File)</span>
+                    {(localSettings.storageMode || 'local') === 'local' && (
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     )}
                   </div>
                   <p className="text-[11px] text-gray-300 leading-snug">
-                    Save data locally on Laptop disk (LocalStorage / Offline JSON DB).
+                    Save all data in ONE single SQLite file (<code className="text-emerald-300">FSDP_Database.db</code>).
                   </p>
                   <p className="text-[10px] text-emerald-400/90 font-mono">
-                    • Standalone EXE Mode • 100% Offline • Private Laptop Storage
+                    • Single SQLite File • 100% Offline • Private PC Storage
                   </p>
                 </div>
               </div>
             </div>
+
+            {/* LOCAL SQLITE DATABASE MANAGEMENT PANEL */}
+            {(localSettings.storageMode || 'local') === 'local' && (
+              <div className="bg-gray-950 border border-emerald-900/60 rounded-xl p-4 space-y-3 font-mono">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-gray-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold text-white uppercase">Local PC Database Status</span>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">
+                      ACTIVE
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-gray-400">
+                    Database File: <strong className="text-gray-200">FSDP_Database.db</strong>
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[11px] text-gray-400 block font-sans">Current Physical Storage Location:</span>
+                  <div className="bg-black/80 border border-gray-800 rounded p-2 text-[11px] text-emerald-400 break-all select-all flex justify-between items-center">
+                    <span>{localDB.getDatabasePath()}</span>
+                  </div>
+                </div>
+
+                {/* 4 ACTION BUTTONS */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewDbPathInput(localDB.getDatabasePath());
+                      setShowChangeLocationModal(true);
+                    }}
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
+                  >
+                    <FolderTree className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Change Location</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => localDB.openDatabaseFolder()}
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
+                  >
+                    <HardDrive className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Open Folder</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => localDB.exportSQLiteDatabaseFile()}
+                    className="px-3 py-2 bg-emerald-800 hover:bg-emerald-700 text-white rounded text-[11px] font-bold border border-emerald-600 flex items-center justify-center gap-1.5 transition-colors shadow"
+                  >
+                    <Download className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>Export Database</span>
+                  </button>
+
+                  <label className="px-3 py-2 bg-blue-800 hover:bg-blue-700 text-white rounded text-[11px] font-bold border border-blue-600 flex items-center justify-center gap-1.5 transition-colors shadow cursor-pointer">
+                    <Upload className="w-3.5 h-3.5 text-blue-300" />
+                    <span>Import Database</span>
+                    <input
+                      type="file"
+                      accept=".db,.fsdbackup,.json"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            const buffer = event.target?.result;
+                            if (buffer instanceof ArrayBuffer) {
+                              setPendingImportBinary(new Uint8Array(buffer));
+                              setShowImportConfirmModal(true);
+                            }
+                          };
+                          reader.readAsArrayBuffer(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
 
             {/* FIREBASE ACCOUNT AUTHENTICATION SECTION */}
             {(localSettings.storageMode || 'firebase') === 'firebase' && (
@@ -1414,6 +1502,121 @@ void loop() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* CHANGE DATABASE LOCATION MODAL */}
+      {showChangeLocationModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl relative font-mono text-xs">
+            <button
+              onClick={() => setShowChangeLocationModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                <FolderTree className="w-5 h-5 text-emerald-400" />
+                <span>CHANGE LOCAL SQLITE DATABASE LOCATION</span>
+              </h3>
+              <p className="text-gray-400 text-[11px] font-sans">
+                Specify custom path for <code className="text-emerald-300">FSDP_Database.db</code> file.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-gray-300 font-semibold block">Database File Path:</label>
+              <input
+                type="text"
+                value={newDbPathInput}
+                onChange={(e) => setNewDbPathInput(e.target.value)}
+                placeholder="FiberSourceDiagnosticPro/Data/FSDP_Database.db"
+                className="w-full bg-black border border-gray-700 text-emerald-400 text-xs rounded p-2.5 font-mono focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[10px] text-gray-500">
+                Example: <code className="text-gray-400">D:\LaserDiagnostics\Data\FSDP_Database.db</code>
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowChangeLocationModal(false)}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newDbPathInput.trim()) {
+                    localDB.locateDatabaseFile(newDbPathInput.trim());
+                    const updated = { ...localSettings, dbPath: newDbPathInput.trim() };
+                    setLocalSettings(updated);
+                    onSettingsSaved(updated);
+                    setShowChangeLocationModal(false);
+                  }
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold shadow"
+              >
+                Save & Set Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* IMPORT FULL DATABASE CONFIRMATION MODAL */}
+      {showImportConfirmModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-amber-600 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl relative font-mono text-xs">
+            <div className="space-y-2">
+              <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                <span>IMPORT FULL DATABASE</span>
+              </h3>
+              <p className="text-gray-200 leading-relaxed font-sans">
+                This will replace/restore the current local database with the selected backup file. An automatic safety backup of your current database will be saved first.
+              </p>
+            </div>
+
+            <div className="bg-amber-950/40 border border-amber-800 rounded p-3 text-[11px] text-amber-300">
+              ✓ Includes Models, References, Reports, Calibration, Settings, and Logs.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImportConfirmModal(false);
+                  setPendingImportBinary(null);
+                }}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingImportBinary) {
+                    const res = localDB.importSQLiteDatabase(pendingImportBinary);
+                    alert(res.message);
+                    if (res.success) {
+                      window.location.reload();
+                    }
+                  }
+                  setShowImportConfirmModal(false);
+                  setPendingImportBinary(null);
+                }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold shadow flex items-center gap-1.5"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Import Database</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -14,14 +14,15 @@ export const AboutModule: React.FC = () => {
             <Zap className="w-8 h-8" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white uppercase">Fiber Source Diagnostic Pro</h2>
-            <p className="text-gray-400 text-xs">Version 3.2.0-PRO (Master Lock Release)</p>
+            <h2 className="text-lg font-bold text-white uppercase">MAYUR FIBER DIAGNOSIS</h2>
+            <p className="text-orange-400 font-semibold text-xs">Developed by Mayur Raval</p>
+            <p className="text-gray-400 text-[10px]">Version 3.2.0-PRO (Master Lock Release)</p>
           </div>
         </div>
 
         <div className="space-y-2 text-gray-300">
           <p>
-            Fiber Source Diagnostic Pro is a production-grade Industrial Fiber Laser Source Diagnostic Platform engineered specifically for Laser Service Engineers, Maintenance Teams, and Repair Facilities.
+            MAYUR FIBER DIAGNOSIS is a production-grade Industrial Fiber Laser Source Diagnostic Platform engineered specifically for Laser Service Engineers, Maintenance Teams, and Repair Facilities.
           </p>
           <p>
             Supported Manufacturers include <span className="text-orange-400 font-bold">Raycus, JPT, IPG, MAX Photonics, RECI, BWT</span>, and custom Fiber Laser Sources.

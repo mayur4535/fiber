@@ -17,7 +17,7 @@ function createWindow() {
     height: 768,
     minWidth: 1024,
     minHeight: 600,
-    title: 'Fiber Source Diagnostic Pro',
+    title: 'MAYUR FIBER DIAGNOSIS',
     icon: path.join(__dirname, '../public/favicon.ico'),
     webPreferences: {
       nodeIntegration: true,

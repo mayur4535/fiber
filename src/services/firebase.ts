@@ -106,7 +106,7 @@ export async function fetchAllUserDataFromCloud(uid: string): Promise<Record<str
 /**
  * Save test log record to online Firebase Firestore database
  */
-export async function saveTestLogToCloud(logData: Omit<FirebaseTestLog, 'id'>) {
+export async function saveTestLogToCloud(logData: any) {
   try {
     const user = auth.currentUser;
     if (user) {
