@@ -2,7 +2,7 @@
  * Industrial Top Header Component
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, 
   Cpu, 
@@ -14,7 +14,16 @@ import {
   RefreshCw,
   UserCheck,
   Download,
-  Sparkles
+  Sparkles,
+  Wifi,
+  Usb,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Info,
+  Sliders,
+  X,
+  Radio
 } from 'lucide-react';
 import { ESP32Status, AppUserRole, FiberModel } from '../../types';
 import { esp32Service } from '../../services/esp32Service';
@@ -39,6 +48,17 @@ export const Header: React.FC<HeaderProps> = ({
   const [timeStr, setTimeStr] = useState<string>('');
 
   const APP_VERSION = '3.2.0';
+
+  // Connection Center Popover states
+  const [isConnPanelOpen, setIsConnPanelOpen] = useState<boolean>(false);
+  const [connTab, setConnTab] = useState<'usb' | 'wifi'>('usb');
+  const [baudRate, setBaudRate] = useState<number>(115200);
+  const [wifiIp, setWifiIp] = useState<string>('192.168.1.50');
+  const [wifiPort, setWifiPort] = useState<number>(81);
+  const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [connError, setConnError] = useState<string | null>(null);
+
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Top Header Auto-Update Indicator & Modal states
   const [updateInfo, setUpdateInfo] = useState<{
@@ -149,9 +169,62 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
+  const handleAutoDetectUSB = async () => {
+    setIsConnecting(true);
+    setConnError(null);
+    try {
+      const ok = await esp32Service.autoDetectUSBPort(baudRate);
+      if (!ok) {
+        setConnError('ESP32 hardware not detected on authorized COM ports. Use "Select USB COM Port" to grant access.');
+      }
+    } catch (err: any) {
+      setConnError(err.message || 'Auto-detect error');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleRequestUSBPort = async () => {
+    setIsConnecting(true);
+    setConnError(null);
+    try {
+      await esp32Service.requestFreshPort(baudRate);
+    } catch (err: any) {
+      setConnError(err.message || 'USB selection failed or cancelled');
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleConnectWiFi = async (mode: 'auto' | 'http') => {
+    setIsConnecting(true);
+    setConnError(null);
+    try {
+      if (mode === 'auto') {
+        await esp32Service.connectWiFiAuto(wifiIp, wifiPort);
+      } else {
+        await esp32Service.connectWiFiHTTPPolling(wifiIp, wifiPort === 81 ? 80 : wifiPort);
+      }
+    } catch (err: any) {
+      setConnError(err.message || `Failed to connect to ESP32 at ${wifiIp}`);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setIsConnecting(true);
+    try {
+      await esp32Service.disconnectHardware(false, true);
+      setConnError(null);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
   return (
     <>
-      <header className="bg-[#0F172A] border-b border-gray-800 px-3 py-1.5 text-white flex flex-row items-center justify-between gap-2 shadow-md z-20 shrink-0">
+      <header className="bg-[#0F172A] border-b border-gray-800 px-3 py-1.5 text-white flex flex-row items-center justify-between gap-2 shadow-md z-20 shrink-0 relative">
         {/* App Branding & Auto Update Notification Badge */}
         <div className="flex items-center gap-2">
           <div className="bg-orange-600 p-1.5 rounded-md flex items-center justify-center text-white font-bold shadow-inner">
@@ -167,7 +240,7 @@ export const Header: React.FC<HeaderProps> = ({
                 v{APP_VERSION}
               </span>
 
-              {/* AUTO UPDATE INDICATOR BADGE (ONLY SHOWS/BLINKS IF UPDATE IS ACTUALLY AVAILABLE) */}
+              {/* AUTO UPDATE INDICATOR BADGE */}
               {updateInfo && updateInfo.hasUpdate && !updateComplete && (
                 <button
                   onClick={() => setIsUpdateModalOpen(true)}
@@ -191,35 +264,65 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Center Hardware & Connection Status Indicators */}
-        <div className="flex items-center gap-2 text-xs">
-          {/* ESP Connection Status */}
+        {/* Center Hardware & Connection Control Center Badge */}
+        <div className="flex items-center gap-2 text-xs relative">
           <div 
-            onClick={onOpenHardwareModal || onOpenTerminal}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border cursor-pointer transition-all shadow ${
-              espStatus.connected 
-                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300 hover:border-emerald-400 hover:bg-emerald-900/80' 
-                : 'bg-red-950/70 border-red-500/60 text-red-200 hover:bg-red-900/80 hover:border-red-400 animate-pulse'
+            onClick={() => setIsConnPanelOpen(!isConnPanelOpen)}
+            className={`flex items-center gap-2 px-3 py-1 rounded-lg border cursor-pointer transition-all shadow-md select-none ${
+              espStatus.isSearching
+                ? 'bg-amber-950/80 border-amber-500/60 text-amber-300 hover:bg-amber-900/80'
+                : espStatus.connected 
+                  ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-200 hover:border-emerald-400 hover:bg-emerald-900/90' 
+                  : 'bg-red-950/80 border-red-500/60 text-red-200 hover:bg-red-900/80 hover:border-red-400'
             }`}
-            title="Click to open Physical ESP32 Hardware Live Connection Window"
+            title="Click to open ESP32 Connection Control Center"
           >
-            <Cpu className={`w-4 h-4 ${espStatus.isCapturing ? 'animate-spin text-orange-400' : espStatus.connected ? 'text-emerald-400' : 'text-red-400'}`} />
+            {espStatus.isSearching ? (
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
+            ) : (
+              <Cpu className={`w-4 h-4 shrink-0 ${espStatus.isCapturing ? 'animate-spin text-orange-400' : espStatus.connected ? 'text-emerald-400' : 'text-red-400'}`} />
+            )}
+
             <div className="flex flex-col">
-              <span className="font-semibold text-[11px] leading-tight">
-                {espStatus.connected ? espStatus.deviceName : 'ESP32 Disconnected'}
-              </span>
-              <span className="text-[9px] text-slate-300 leading-tight">
-                {espStatus.connected ? `${espStatus.connectionType} (${espStatus.portName})` : 'Click to connect'}
+              <div className="flex items-center gap-1.5 font-bold text-[11px] leading-tight">
+                {espStatus.isSearching ? (
+                  <span className="text-amber-300 animate-pulse">Detecting ESP32...</span>
+                ) : espStatus.connected ? (
+                  <span className="text-emerald-300">{espStatus.deviceName}</span>
+                ) : (
+                  <span className="text-red-300">ESP32 Not Connected</span>
+                )}
+
+                {espStatus.connected && (
+                  <span className="text-[9px] bg-emerald-500/30 text-emerald-200 border border-emerald-400/40 px-1 py-0.2 rounded font-mono font-bold">
+                    {espStatus.connectionType.includes('USB') ? 'USB' : 'Wi-Fi'}
+                  </span>
+                )}
+              </div>
+
+              <span className="text-[9.5px] text-slate-300 leading-tight font-mono">
+                {espStatus.isSearching 
+                  ? (espStatus.searchStatusText || 'Scanning COM Ports...')
+                  : espStatus.connected 
+                    ? `${espStatus.portName || 'Connected'} • FW:${espStatus.firmwareVersion || '3.0'}` 
+                    : 'Click to Scan / Connect'}
               </span>
             </div>
-            <span className={`w-2 h-2 rounded-full ${espStatus.connected ? 'bg-emerald-400 animate-ping' : 'bg-red-500 animate-ping'}`} />
+
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+              espStatus.isSearching 
+                ? 'bg-amber-400 animate-ping' 
+                : espStatus.connected 
+                  ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' 
+                  : 'bg-red-500 animate-ping'
+            }`} />
           </div>
 
-          {/* Device Temp */}
+          {/* Device Temp Badge */}
           {espStatus.connected && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-gray-800/80 border border-gray-700/80 rounded text-gray-300">
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-gray-800/80 border border-gray-700/80 rounded text-gray-300 font-mono text-[11px]">
               <Zap className="w-3.5 h-3.5 text-orange-400" />
-              <span className="font-mono text-xs">{espStatus.deviceTemperatureC}°C</span>
+              <span>{espStatus.deviceTemperatureC}°C</span>
             </div>
           )}
 
@@ -228,6 +331,204 @@ export const Header: React.FC<HeaderProps> = ({
             <Clock className="w-3.5 h-3.5 text-blue-400" />
             <span>{timeStr || 'System Ready'}</span>
           </div>
+
+          {/* TOP HEADER CONNECTION CONTROL CENTER POPOVER PANEL */}
+          {isConnPanelOpen && (
+            <div 
+              ref={panelRef}
+              className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-80 sm:w-96 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-4 text-white z-50 animate-in fade-in zoom-in-95 duration-150"
+            >
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-orange-400" />
+                  <span className="font-bold text-xs uppercase tracking-wide text-slate-200">
+                    ESP32 Connection Control Center
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsConnPanelOpen(false)}
+                  className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* CURRENT HARDWARE STATUS BOX */}
+              <div className={`p-3 rounded-lg border mb-3 space-y-1.5 text-xs font-mono ${
+                espStatus.connected 
+                  ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-200' 
+                  : 'bg-slate-950 border-slate-800 text-slate-300'
+              }`}>
+                <div className="flex justify-between items-center">
+                  <span className="font-bold uppercase text-[10px] text-slate-400">Current Status</span>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    espStatus.connected ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-red-500/20 text-red-300 border border-red-500/40'
+                  }`}>
+                    {espStatus.connected ? '🟢 VERIFIED CONNECTED' : '🔴 DISCONNECTED'}
+                  </span>
+                </div>
+
+                {espStatus.connected ? (
+                  <div className="space-y-1 pt-1 text-[11px]">
+                    <div className="flex justify-between"><span className="text-slate-400">Device Name:</span><span className="font-bold text-emerald-300">{espStatus.deviceName}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Connection:</span><span>{espStatus.connectionType} ({espStatus.portName})</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Firmware:</span><span className="text-amber-300 font-bold">{espStatus.firmwareVersion}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Hardware UID:</span><span className="text-cyan-300 font-bold">{espStatus.serialNumber}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Temperature:</span><span>{espStatus.deviceTemperatureC}°C</span></div>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-400 pt-1 leading-relaxed">
+                    No active ESP32-S3 hardware link verified. Click <strong className="text-emerald-400">Auto-Detect</strong> or select port below.
+                  </p>
+                )}
+              </div>
+
+              {/* CONNECTION TAB SELECTOR */}
+              <div className="flex border-b border-slate-800 mb-3">
+                <button
+                  onClick={() => setConnTab('usb')}
+                  className={`flex-1 py-1.5 text-xs font-bold flex items-center justify-center gap-1.5 border-b-2 transition-all ${
+                    connTab === 'usb'
+                      ? 'border-emerald-500 text-emerald-400 bg-emerald-950/30'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Usb className="w-3.5 h-3.5" />
+                  <span>USB Serial (COM)</span>
+                </button>
+
+                <button
+                  onClick={() => setConnTab('wifi')}
+                  className={`flex-1 py-1.5 text-xs font-bold flex items-center justify-center gap-1.5 border-b-2 transition-all ${
+                    connTab === 'wifi'
+                      ? 'border-cyan-500 text-cyan-400 bg-cyan-950/30'
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Wifi className="w-3.5 h-3.5" />
+                  <span>Wi-Fi Network</span>
+                </button>
+              </div>
+
+              {/* TAB 1: USB SERIAL */}
+              {connTab === 'usb' && (
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="text-slate-400 block text-[10px] font-bold uppercase mb-1">Baud Rate</label>
+                    <select
+                      value={baudRate}
+                      onChange={(e) => setBaudRate(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-bold rounded-lg px-2.5 py-1.5 outline-none focus:border-emerald-500"
+                    >
+                      <option value={115200}>115200 Baud (Standard ESP32-S3)</option>
+                      <option value={921600}>921600 Baud (High Speed)</option>
+                      <option value={57600}>57600 Baud</option>
+                      <option value={9600}>9600 Baud</option>
+                    </select>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <button
+                      disabled={isConnecting || espStatus.isSearching}
+                      onClick={handleAutoDetectUSB}
+                      className="w-full py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white rounded-lg font-bold transition-all text-xs flex items-center justify-center gap-2 shadow"
+                    >
+                      <Zap className="w-4 h-4 text-amber-300" />
+                      <span>{isConnecting || espStatus.isSearching ? 'Scanning & Handshaking...' : '⚡ Auto-Detect ESP32-S3 (USB)'}</span>
+                    </button>
+
+                    <button
+                      disabled={isConnecting || espStatus.isSearching}
+                      onClick={handleRequestUSBPort}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 rounded-lg font-bold transition-all text-xs flex items-center justify-center gap-2"
+                    >
+                      <Usb className="w-4 h-4 text-emerald-400" />
+                      <span>🔌 Select / Grant USB COM Port</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: WI-FI NETWORK */}
+              {connTab === 'wifi' && (
+                <div className="space-y-3 text-xs">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-slate-400 block text-[10px] font-bold uppercase mb-1">ESP32 IP</label>
+                      <input
+                        type="text"
+                        value={wifiIp}
+                        onChange={(e) => setWifiIp(e.target.value)}
+                        placeholder="192.168.1.50"
+                        className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-bold rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 block text-[10px] font-bold uppercase mb-1">Port</label>
+                      <input
+                        type="number"
+                        value={wifiPort}
+                        onChange={(e) => setWifiPort(Number(e.target.value))}
+                        placeholder="81"
+                        className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-bold rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <button
+                      disabled={isConnecting}
+                      onClick={() => handleConnectWiFi('auto')}
+                      className="w-full py-2 bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 disabled:opacity-50 text-white rounded-lg font-bold transition-all text-xs flex items-center justify-center gap-2 shadow"
+                    >
+                      <Radio className="w-4 h-4 text-amber-300" />
+                      <span>{isConnecting ? 'Connecting Wi-Fi...' : '⚡ Connect Wi-Fi (Auto WebSocket / HTTP)'}</span>
+                    </button>
+
+                    <button
+                      disabled={isConnecting}
+                      onClick={() => handleConnectWiFi('http')}
+                      className="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 rounded-lg font-bold text-xs"
+                    >
+                      🌐 Connect HTTP Live Stream Mode
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ERROR NOTICE IN PANEL */}
+              {connError && (
+                <div className="mt-3 p-2 bg-red-950/80 border border-red-500/60 rounded-lg text-red-200 text-[11px] flex items-start gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <p className="leading-tight">{connError}</p>
+                </div>
+              )}
+
+              {/* BOTTOM ACTIONS */}
+              <div className="mt-4 pt-2 border-t border-slate-800 flex justify-between items-center">
+                {espStatus.connected ? (
+                  <button
+                    onClick={handleDisconnect}
+                    className="w-full py-1.5 bg-red-950 hover:bg-red-900 border border-red-700 text-red-200 rounded-lg font-bold text-xs transition-all"
+                  >
+                    Disconnect ESP32 Hardware
+                  </button>
+                ) : (
+                  <div className="flex justify-between w-full items-center text-[11px] text-slate-400">
+                    <span>Handshake Protocol: HELLO / HELLO_ACK</span>
+                    <button
+                      onClick={onOpenTerminal}
+                      className="text-orange-400 hover:underline font-bold flex items-center gap-1"
+                    >
+                      <Terminal className="w-3.5 h-3.5" />
+                      <span>Terminal</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Controls: User Role Selector */}

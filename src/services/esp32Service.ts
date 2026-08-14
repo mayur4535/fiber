@@ -68,8 +68,37 @@ class ESP32CommunicationService {
   private heartbeatInterval: any = null;
   private helloAckListeners: Set<(ack: any) => void> = new Set();
 
+  private autoReconnectTimer: any = null;
+  private userInitiatedDisconnect: boolean = false;
+
   constructor() {
-    // Hardware communication service initialized
+    this.initBrowserSerialListeners();
+    // Non-blocking initial auto-detection scan after load
+    if (typeof window !== 'undefined') {
+      setTimeout(() => {
+        this.autoDetectUSBPort().catch(() => {});
+      }, 600);
+    }
+  }
+
+  private initBrowserSerialListeners(): void {
+    if (typeof window !== 'undefined' && 'serial' in navigator) {
+      try {
+        (navigator as any).serial.addEventListener('connect', () => {
+          this.logConnection('🔌 USB Serial device plugged in. Running auto-detection...');
+          this.autoDetectUSBPort().catch(() => {});
+        });
+
+        (navigator as any).serial.addEventListener('disconnect', (event: any) => {
+          this.logConnection('🔌 USB Serial device unplugged.');
+          if (this.serialPort === event.target) {
+            this.disconnectHardware(false, false);
+          }
+        });
+      } catch (e) {
+        // Ignore listener attach errors
+      }
+    }
   }
 
   public getIsRealHardwareConnected(): boolean {
@@ -84,6 +113,128 @@ class ESP32CommunicationService {
   private logConnection(log: string): void {
     localDB.log('INFO', 'ESP32 Hardware', log);
     this.connectionLogListeners.forEach(fn => fn(log));
+  }
+
+  private scheduleAutoReconnect(): void {
+    if (this.userInitiatedDisconnect) return;
+    if (this.autoReconnectTimer) clearTimeout(this.autoReconnectTimer);
+
+    this.autoReconnectTimer = setTimeout(() => {
+      if (!this.status.connected && !this.userInitiatedDisconnect) {
+        this.logConnection('🔄 Auto-Reconnect: Attempting to scan and verify ESP32 hardware...');
+        this.autoDetectUSBPort().catch(() => {});
+      }
+    }, 6000);
+  }
+
+  // --- AUTOMATIC ESP32 USB COM PORT DETECTION & HANDSHAKE ---
+
+  public async autoDetectUSBPort(baudRate: number = 115200): Promise<boolean> {
+    if (this.status.connected && this.isRealHardwareConnected) {
+      return true;
+    }
+
+    this.userInitiatedDisconnect = false;
+    this.status.isSearching = true;
+    this.status.searchStatusText = 'Scanning COM Ports...';
+    this.status.connectionError = undefined;
+    this.notifyStatus();
+
+    this.logConnection(`🔍 Starting automatic ESP32 COM port detection at ${baudRate} baud...`);
+
+    if (!('serial' in navigator)) {
+      this.status.isSearching = false;
+      this.status.connected = false;
+      this.status.connectionError = 'Web Serial API not supported in browser';
+      this.notifyStatus();
+      this.logConnection('⚠️ Web Serial API not supported in this browser environment.');
+      return false;
+    }
+
+    try {
+      const ports = await (navigator as any).serial.getPorts();
+      if (!ports || ports.length === 0) {
+        this.logConnection('ℹ️ Auto-detect: No granted USB Serial ports found.');
+        this.status.isSearching = false;
+        this.status.connected = false;
+        this.status.connectionError = 'ESP32 NOT CONNECTED';
+        this.notifyStatus();
+        return false;
+      }
+
+      // Sort candidate ports favoring known ESP32 / USB Serial VIDs (0x303a, 0x10c4, 0x1a86, 0x0403)
+      const knownVids = [0x303a, 0x10c4, 0x1a86, 0x0403];
+      const sortedPorts = [...ports].sort((a, b) => {
+        const infoA = a.getInfo?.() || {};
+        const infoB = b.getInfo?.() || {};
+        const aKnown = infoA.usbVendorId ? knownVids.includes(infoA.usbVendorId) : false;
+        const bKnown = infoB.usbVendorId ? knownVids.includes(infoB.usbVendorId) : false;
+        if (aKnown && !bKnown) return -1;
+        if (!aKnown && bKnown) return 1;
+        return 0;
+      });
+
+      for (let i = 0; i < sortedPorts.length; i++) {
+        const candidatePort = sortedPorts[i];
+        const info = candidatePort.getInfo?.() || {};
+        const portNameLabel = info.usbVendorId 
+          ? `USB Serial (VID:0x${info.usbVendorId.toString(16).toUpperCase()}${info.usbProductId ? `:0x${info.usbProductId.toString(16).toUpperCase()}` : ''})`
+          : `COM Port ${i + 1}`;
+
+        this.logConnection(`🔌 Auto-Detect testing candidate port ${i + 1}/${sortedPorts.length}: ${portNameLabel}...`);
+        this.status.searchStatusText = `Testing ${portNameLabel}...`;
+        this.notifyStatus();
+
+        // Clean previous handle before testing candidate
+        await this.disconnectHardware(true);
+
+        try {
+          const openPromise = candidatePort.open({ baudRate });
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('COM Port open timeout')), 2500)
+          );
+          await Promise.race([openPromise, timeoutPromise]);
+
+          this.serialPort = candidatePort;
+          this.status.baudRate = baudRate;
+          this.status.portName = portNameLabel;
+
+          this.startSerialReader(candidatePort);
+
+          this.status.searchStatusText = 'Sending HELLO? Handshake...';
+          this.notifyStatus();
+
+          const verified = await this.performHardwareHandshake('USB Serial', portNameLabel);
+          if (verified) {
+            this.status.isSearching = false;
+            this.status.searchStatusText = undefined;
+            this.status.connectionError = undefined;
+            this.notifyStatus();
+            this.logConnection(`✅ ESP32 Auto-Detected and Verified on ${portNameLabel}!`);
+            return true;
+          }
+        } catch (err: any) {
+          this.logConnection(`⚠️ Candidate port ${portNameLabel} failed handshake: ${err.message || err}`);
+          await this.disconnectHardware(true);
+        }
+      }
+
+      this.status.isSearching = false;
+      this.status.searchStatusText = undefined;
+      this.status.connected = false;
+      this.status.connectionError = 'ESP32 NOT CONNECTED';
+      this.notifyStatus();
+      this.logConnection('🔴 Auto-detect finished: No valid ESP32-S3 hardware verified.');
+      return false;
+    } catch (err: any) {
+      this.status.isSearching = false;
+      this.status.searchStatusText = undefined;
+      this.status.connected = false;
+      this.status.connectionError = 'Auto-Detect Exception';
+      this.notifyStatus();
+      this.logConnection(`❌ Auto-Detect Error: ${err.message || err}`);
+      return false;
+    }
   }
 
   // --- REAL ESP32 HANDSHAKE & HEARTBEAT ENGINE ---
@@ -224,67 +375,12 @@ class ESP32CommunicationService {
       throw new Error('Web Serial API is not supported in this browser.');
     }
 
-    // Always clean up previous port/reader before connecting new one
-    await this.disconnectHardware();
+    // Try automatic detection on already granted ports
+    const autoSuccess = await this.autoDetectUSBPort(baudRate);
+    if (autoSuccess) return true;
 
-    try {
-      this.logConnection(`🔌 Requesting USB Serial / COM Port access at ${baudRate} baud...`);
-      let port: any = null;
-
-      try {
-        const existingPorts = await (navigator as any).serial.getPorts();
-        if (existingPorts && existingPorts.length > 0) {
-          port = existingPorts[0];
-          this.logConnection('ℹ️ Testing existing granted USB Serial port...');
-        }
-      } catch (e) {
-        // Fall back to requestPort
-      }
-
-      if (!port) {
-        port = await (navigator as any).serial.requestPort();
-      }
-
-      // Open port with 5-second timeout protection to avoid freezing UI if port is busy
-      const openPromise = port.open({ baudRate });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('COM Port open timeout. Port may be busy or locked by Arduino IDE / another program.')), 5000)
-      );
-
-      try {
-        await Promise.race([openPromise, timeoutPromise]);
-      } catch (openErr: any) {
-        // If cached port failed to open, prompt user for fresh port selection
-        this.logConnection(`⚠️ Port open failed (${openErr.message || 'Busy'}). Prompting COM port selection...`);
-        port = await (navigator as any).serial.requestPort();
-        
-        const freshOpenPromise = port.open({ baudRate });
-        const freshTimeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('COM Port open timeout. Port may be busy or locked by another program.')), 4000)
-        );
-        await Promise.race([freshOpenPromise, freshTimeoutPromise]);
-      }
-
-      this.serialPort = port;
-      this.status.baudRate = baudRate;
-      this.status.portName = `USB Serial (${baudRate} Baud)`;
-
-      this.logConnection(`✅ COM Port opened. Starting stream reader and verifying ESP32 hardware handshake...`);
-      this.startSerialReader(port);
-
-      // MANDATORY HANDSHAKE: Send HELLO? and wait for HELLO_ACK
-      return await this.performHardwareHandshake('USB Serial', `USB Serial (${baudRate} Baud)`);
-    } catch (err: any) {
-      await this.disconnectHardware();
-      const msg = err.message || String(err);
-      if (msg.includes('No port selected') || msg.includes('canceled') || msg.includes('Failed to execute')) {
-        const customErr = 'COM Port not detected by Windows / User closed window.\n\nQuick Fixes:\n1. Use a Data USB Cable (not a charge cable).\n2. Install CP2102 or CH340 / ESP32-S3 CDC Driver in Windows.\n3. Close Arduino IDE Serial Monitor (port may be locked).\n4. In Arduino IDE set: Tools -> USB CDC On Boot: "Enabled".';
-        this.logConnection(`❌ USB Serial Error: ${customErr}`);
-        throw new Error(customErr);
-      }
-      this.logConnection(`❌ USB Serial Connection Error: ${msg}`);
-      throw err;
-    }
+    // If auto-detection didn't find an authorized port, prompt user to pick port
+    return await this.requestFreshPort(baudRate);
   }
 
   private async startSerialReader(port: any) {
@@ -637,10 +733,22 @@ class ESP32CommunicationService {
     }
   }
 
-  public async disconnectHardware(): Promise<void> {
+  public async disconnectHardware(internalCleanup: boolean = false, manual: boolean = false): Promise<void> {
+    if (manual) {
+      this.userInitiatedDisconnect = true;
+      if (this.autoReconnectTimer) {
+        clearTimeout(this.autoReconnectTimer);
+        this.autoReconnectTimer = null;
+      }
+    }
+
     if (this.httpPollingInterval) {
       clearInterval(this.httpPollingInterval);
       this.httpPollingInterval = null;
+    }
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
     if (this.serialReader) {
       try { await this.serialReader.cancel(); } catch (e) {}
@@ -654,11 +762,22 @@ class ESP32CommunicationService {
       try { this.webSocket.close(); } catch (e) {}
       this.webSocket = null;
     }
-    this.status.connected = false;
-    this.status.connectionType = 'Simulated';
+
     this.isRealHardwareConnected = false;
-    this.notifyStatus();
-    this.logConnection('🔌 Disconnected real hardware interface.');
+
+    if (!internalCleanup) {
+      this.status.connected = false;
+      this.status.connectionType = 'Disconnected';
+      this.status.portName = 'Not Connected';
+      this.status.isSearching = false;
+      this.status.searchStatusText = undefined;
+      this.notifyStatus();
+      this.logConnection('🔌 Disconnected real hardware interface.');
+
+      if (!manual && !this.userInitiatedDisconnect) {
+        this.scheduleAutoReconnect();
+      }
+    }
   }
 
   public getStatus(): ESP32Status {

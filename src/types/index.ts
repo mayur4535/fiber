@@ -188,6 +188,9 @@ export interface ESP32Status {
   isCapturing: boolean;
   portName?: string;
   baudRate: number;
+  isSearching?: boolean;
+  searchStatusText?: string;
+  connectionError?: string;
 }
 
 export interface AppSettings {
