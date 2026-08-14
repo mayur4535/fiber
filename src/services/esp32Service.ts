@@ -89,6 +89,7 @@ class ESP32CommunicationService {
 
   private autoReconnectTimer: any = null;
   private userInitiatedDisconnect: boolean = false;
+  private lastHardwareCaptureTime: number = 0;
 
   constructor() {
     this.initBrowserSerialListeners();
@@ -619,6 +620,16 @@ class ESP32CommunicationService {
 
       // Handle Hardware Switch Events (GPIO5 Capture & GPIO6 Next)
       if (cleanLine === 'EVENT:CAPTURE' || cleanLine.includes('EVENT:CAPTURE')) {
+        const now = Date.now();
+        if (this.status.isCapturing) {
+          this.logConnection('⚠️ Hardware Event IGNORED: CAPTURE (GPIO5 Switch pressed while capture in progress)');
+          return;
+        }
+        if (now - this.lastHardwareCaptureTime < 1500) {
+          this.logConnection('⚠️ Hardware Event DEBOUNCED: CAPTURE (GPIO5 Switch bounce within 1.5s ignored)');
+          return;
+        }
+        this.lastHardwareCaptureTime = now;
         this.logConnection('🔘 Hardware Event Received: CAPTURE (GPIO5 Switch)');
         this.hardwareEventListeners.forEach(fn => fn('CAPTURE'));
         return;
@@ -1018,7 +1029,11 @@ class ESP32CommunicationService {
         }
       }
 
-      this.executeESP32CaptureEngine(capId, refPower);
+      if (!this.isRealHardwareConnected) {
+        this.executeESP32CaptureEngine(capId, refPower);
+      } else {
+        this.logConnection(`📡 Hardware Capture Command transmitted to physical ESP32-S3 (${capId}). Awaiting hardware MEASUREMENT_RESULT packet...`);
+      }
       return 'CAPTURE_COMMAND_SENT';
     }
 

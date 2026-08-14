@@ -658,6 +658,7 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
 
   const samplesReceivedRef = useRef<boolean>(false);
   const processedCaptureIdsRef = useRef<Set<string>>(new Set());
+  const captureSourceRef = useRef<'PC_BUTTON' | 'GPIO5_SWITCH'>('PC_BUTTON');
 
   // Process 100 raw samples received from verified ESP32
   const processReferenceSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
@@ -700,6 +701,11 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
         samplesReceivedRef.current = false;
       } else if (evt.type === 'MEASUREMENT_RESULT') {
         const result = evt.payload;
+        const source = captureSourceRef.current;
+        const timeStr = new Date().toISOString();
+
+        console.log(`[MEASUREMENT_RESULT] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} average_power=${result.average_power} intensity=${result.intensity} optical_loss=${result.optical_loss} stability=${result.stability} min_power=${result.min_power} max_power=${result.max_power} tolerance=${result.tolerance} reading_time=${result.reading_time}`);
+
         // Validate 100 sample count and device metadata
         if (result.sample_count !== 100) {
           alert(`❌ INVALID CAPTURE PACKET: ESP32 returned sample_count = ${result.sample_count}. Expected exactly 100 samples.`);
@@ -709,7 +715,7 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
 
         // Lock by capture_id: prevent duplicate processing or second updates
         if (result.capture_id && processedCaptureIdsRef.current.has(result.capture_id)) {
-          console.log(`[LOCK] Settings Model Manager - Ignoring duplicate MEASUREMENT_RESULT for capture_id: ${result.capture_id}`);
+          console.log(`[SECOND_UPDATE_BLOCKED] time=${timeStr} source=${source} capture_id=${result.capture_id} average_power=${result.average_power} (Duplicate result rejected by lock)`);
           return;
         }
         if (result.capture_id) {
@@ -723,6 +729,8 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
           const delta = Math.abs(pcAvg - result.average_power);
           console.log(`[DUAL-VERIFICATION] Reference Capture - ESP32 Avg: ${result.average_power} W | PC Recalc Avg: ${pcAvg} W | Delta: ${delta.toFixed(4)} W`);
         }
+
+        console.log(`[UI_UPDATE] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} average_power=${result.average_power}`);
 
         // DIRECT PLACEMENT: Update UI directly from ESP32 Measurement Engine Packet
         setParamIntensity(`${result.intensity.toFixed(2)}`);
@@ -741,7 +749,9 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
         const { capture_id, samples, reading_time } = evt.payload;
         if (Array.isArray(samples) && samples.length === 100) {
           const isLocked = capture_id ? processedCaptureIdsRef.current.has(capture_id) : false;
-          if (!samplesReceivedRef.current && !isLocked) {
+          if (samplesReceivedRef.current || isLocked) {
+            console.log(`[SECOND_UPDATE_BLOCKED] time=${new Date().toISOString()} capture_id=${capture_id || 'N/A'} (Raw SAMPLES event ignored after lock)`);
+          } else {
             processReferenceSamples(samples.map(s => Number(s)), reading_time || 5.0);
           }
         }
@@ -752,7 +762,8 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
 
     const unsubHW = esp32Service.subscribeHardwareEvents((event) => {
       if (event === 'CAPTURE') {
-        handleCaptureReading();
+        console.log(`[CAPTURE_EVENT] trigger=GPIO5_SWITCH time=${new Date().toISOString()}`);
+        handleCaptureReading('GPIO5_SWITCH');
       }
     });
 
@@ -763,8 +774,10 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
   }, [processReferenceSamples]);
 
   // REFERENCE READING ACTIONS (Column 3)
-  const handleCaptureReading = async () => {
+  const handleCaptureReading = async (source: 'PC_BUTTON' | 'GPIO5_SWITCH' = 'PC_BUTTON') => {
     if (isCapturing) return;
+
+    captureSourceRef.current = source;
 
     // MANDATORY HARDWARE CHECK: No capture without real connected & verified ESP32
     const currentEspStatus = esp32Service.getStatus();

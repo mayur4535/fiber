@@ -519,6 +519,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const captureStepIdRef = useRef<string>('');
   const captureCycleIdRef = useRef<string>('');
   const processedCaptureIdsRef = useRef<Set<string>>(new Set());
+  const captureSourceRef = useRef<'PC_BUTTON' | 'GPIO5_SWITCH'>('PC_BUTTON');
 
   // Live Captured parameters (7 required metrics)
   const [capturedParams, setCapturedParams] = useState<{
@@ -809,7 +810,8 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   useEffect(() => {
     const unsubHW = esp32Service.subscribeHardwareEvents((event) => {
       if (event === 'CAPTURE') {
-        handleCaptureReading();
+        console.log(`[CAPTURE_EVENT] trigger=GPIO5_SWITCH time=${new Date().toISOString()}`);
+        handleCaptureReading('GPIO5_SWITCH');
       } else if (event === 'NEXT') {
         handleSaveAndNext();
       }
@@ -927,6 +929,12 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         samplesReceivedRef.current = false;
       } else if (evt.type === 'MEASUREMENT_RESULT') {
         const result = evt.payload;
+        const targetJoint = captureJointRef.current || selectedJoint;
+        const source = captureSourceRef.current;
+        const timeStr = new Date().toISOString();
+
+        console.log(`[MEASUREMENT_RESULT] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} target_joint=${targetJoint} average_power=${result.average_power} intensity=${result.intensity} optical_loss=${result.optical_loss} stability=${result.stability} min_power=${result.min_power} max_power=${result.max_power} tolerance=${result.tolerance} reading_time=${result.reading_time}`);
+
         // Validate 100 sample count and device metadata
         if (result.sample_count !== 100) {
           alert(`❌ INVALID CAPTURE PACKET: ESP32 returned sample_count = ${result.sample_count}. Expected exactly 100 samples.`);
@@ -936,14 +944,13 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
         // Lock by capture_id: prevent duplicate processing or second updates
         if (result.capture_id && processedCaptureIdsRef.current.has(result.capture_id)) {
-          console.log(`[LOCK] Ignoring duplicate MEASUREMENT_RESULT for capture_id: ${result.capture_id}`);
+          console.log(`[SECOND_UPDATE_BLOCKED] time=${timeStr} source=${source} capture_id=${result.capture_id} average_power=${result.average_power} (Duplicate result rejected by capture_id lock)`);
           return;
         }
         if (result.capture_id) {
           processedCaptureIdsRef.current.add(result.capture_id);
         }
 
-        const targetJoint = captureJointRef.current || selectedJoint;
         const targetStepId = captureStepIdRef.current || activeStepId;
         const targetCycleId = captureCycleIdRef.current || activeCycleId;
 
@@ -977,6 +984,8 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           tolerance: `${result.tolerance.toFixed(2)} %`,
           readingTime: `${result.reading_time.toFixed(2)} s`
         };
+
+        console.log(`[UI_UPDATE] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} target_joint=${targetJoint} average_power=${result.average_power}`);
 
         setJointParamsMap(prev => ({ ...prev, [targetJoint]: newParams }));
         if (selectedJoint === targetJoint) {
@@ -1013,7 +1022,9 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
           // Do NOT recalculate or overwrite if MEASUREMENT_RESULT was already received or capture is locked
           const isLocked = capture_id ? processedCaptureIdsRef.current.has(capture_id) : false;
-          if (!samplesReceivedRef.current && !isLocked) {
+          if (samplesReceivedRef.current || isLocked) {
+            console.log(`[SECOND_UPDATE_BLOCKED] time=${new Date().toISOString()} capture_id=${capture_id || 'N/A'} (Raw SAMPLES event ignored after MEASUREMENT_RESULT lock)`);
+          } else {
             processCapturedSamples(validNumSamples, reading_time || 5.0);
           }
         }
@@ -1024,8 +1035,10 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     return () => unsubCapEvents();
   }, [processCapturedSamples, espStatus.serialNumber, espStatus.connectionType, activeCycleId, activeStepId, selectedJoint]);
 
-  const handleCaptureReading = async () => {
+  const handleCaptureReading = async (source: 'PC_BUTTON' | 'GPIO5_SWITCH' = 'PC_BUTTON') => {
     if (isCapturing) return;
+
+    captureSourceRef.current = source;
 
     // Pin capture context
     captureJointRef.current = selectedJoint;
@@ -1046,6 +1059,8 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
     const capId = `TEST00${captureSequenceIndex + 1}`;
     setCaptureSequenceIndex((idx) => idx + 1);
+
+    console.log(`[CAPTURE_EVENT] source=${source} capture_id=${capId} time=${new Date().toISOString()} target_joint=${selectedJoint}`);
 
     // Retrieve current saved reference power for the selected joint
     const savedRef = getReferenceParams();
