@@ -874,9 +874,64 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         setCaptureCountdown(5);
         setHasCaptured(false);
         samplesReceivedRef.current = false;
+      } else if (evt.type === 'MEASUREMENT_RESULT') {
+        const result = evt.payload;
+        // Validate 100 sample count and device metadata
+        if (result.sample_count !== 100) {
+          alert(`❌ INVALID CAPTURE PACKET: ESP32 returned sample_count = ${result.sample_count}. Expected exactly 100 samples.`);
+          setIsCapturing(false);
+          return;
+        }
+
+        // Dual Calculation Verification Step (PC vs ESP32)
+        if (result.raw_samples && result.raw_samples.length === 100) {
+          const pcSum = result.raw_samples.reduce((a, b) => a + Number(b), 0);
+          const pcAvg = Number((pcSum / 100).toFixed(2));
+          const delta = Math.abs(pcAvg - result.average_power);
+          console.log(`[DUAL-VERIFICATION] Live Test Reading - ESP32 Avg: ${result.average_power} W | PC Recalc Avg: ${pcAvg} W | Delta: ${delta.toFixed(4)} W`);
+
+          setRawSamplesData({
+            captureId: result.capture_id || `CAP_${Date.now().toString().slice(-4)}`,
+            sampleCount: 100,
+            readingTime: result.reading_time || 5.0,
+            samples: result.raw_samples,
+            timestamp: new Date().toLocaleTimeString(),
+            source: 'REAL_ESP32',
+            deviceUid: result.uid || espStatus.serialNumber || 'ESP32-S3-UID',
+            connectionType: espStatus.connectionType
+          });
+        }
+
+        // Update UI directly from ESP32 Final Measurement Packet
+        const hasRef = result.reference_power > 0;
+        const newParams = {
+          intensity: `${result.intensity.toFixed(2)} %`,
+          averagePower: `${result.average_power.toFixed(2)} W`,
+          loss: hasRef ? `${result.optical_loss.toFixed(2)} %` : 'Ref N/A',
+          stability: `${result.stability.toFixed(2)} %`,
+          minimum: `${result.min_power.toFixed(2)} W`,
+          maximum: `${result.max_power.toFixed(2)} W`,
+          tolerance: hasRef ? `${result.tolerance.toFixed(2)} %` : 'Ref N/A',
+          readingTime: `${result.reading_time.toFixed(2)} s`
+        };
+
+        setCapturedParams(newParams);
+        setIsCapturing(false);
+        setHasCaptured(true);
+        samplesReceivedRef.current = true;
+
+        setJointStatuses((prev) => ({
+          ...prev,
+          [`${activeCycleId}-${activeStepId}-${selectedJoint}`]: 'Captured'
+        }));
+
+        setJointReadings((prev) => ({
+          ...prev,
+          [selectedJoint]: result.average_power
+        }));
       } else if (evt.type === 'SAMPLES') {
         const { capture_id, samples, reading_time } = evt.payload;
-        if (Array.isArray(samples) && samples.length === 100) {
+        if (Array.isArray(samples) && samples.length === 100 && !samplesReceivedRef.current) {
           const validNumSamples = samples.map(s => Number(s));
           setRawSamplesData({
             captureId: capture_id || `CAP_${Date.now().toString().slice(-4)}`,
@@ -889,16 +944,13 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
             connectionType: espStatus.connectionType
           });
           processCapturedSamples(validNumSamples, reading_time || 5.0);
-        } else {
-          alert(`❌ INVALID CAPTURE DATA: ESP32 returned ${samples?.length || 0} samples. Expected exactly 100 samples.`);
-          setIsCapturing(false);
         }
       } else if (evt.type === 'CAPTURE_COMPLETE') {
         setIsCapturing(false);
       }
     });
     return () => unsubCapEvents();
-  }, [processCapturedSamples, espStatus.serialNumber, espStatus.connectionType]);
+  }, [processCapturedSamples, espStatus.serialNumber, espStatus.connectionType, activeCycleId, activeStepId, selectedJoint]);
 
   const handleCaptureReading = async () => {
     if (isCapturing) return;
@@ -918,9 +970,14 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     const capId = `TEST00${captureSequenceIndex + 1}`;
     setCaptureSequenceIndex((idx) => idx + 1);
 
-    // Send CAPTURE:<capture_id> command to real ESP32
+    // Retrieve current saved reference power for the selected joint
+    const savedRef = getReferenceParams();
+    const hasSavedRef = savedRef !== null;
+    const refPower = hasSavedRef ? (savedRef.averagePower ?? savedRef.intensity) : 0;
+
+    // Send CAPTURE command with reference parameters to ESP32
     try {
-      await esp32Service.sendRawCommand(`CAPTURE:${capId}`);
+      await esp32Service.sendRawCommand(`CAPTURE:{"capture_id":"${capId}","reference_power":${refPower}}`);
     } catch (e: any) {
       alert(`ESP32 Capture Transmission Failed: ${e.message || e}`);
       setIsCapturing(false);

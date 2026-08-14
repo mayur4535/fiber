@@ -3,7 +3,7 @@
  * Replaces duplicate views with a single, pixel-perfect 3-panel layout matching user specification.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Plus, 
   Edit3, 
@@ -656,34 +656,132 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
     });
   };
 
+  const samplesReceivedRef = useRef<boolean>(false);
+
+  // Process 100 raw samples received from verified ESP32
+  const processReferenceSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
+    if (!Array.isArray(samples) || samples.length === 0) return;
+
+    // Validate 100 numeric samples
+    const validSamples = samples.map(s => Number(s)).filter(s => !isNaN(s));
+    const count = validSamples.length;
+
+    // Calculate arithmetic mean: SUM(samples) / 100
+    const sum = validSamples.reduce((acc, v) => acc + v, 0);
+    const avg = count > 0 ? sum / count : 0;
+
+    const minVal = count > 0 ? Math.min(...validSamples) : 0;
+    const maxVal = count > 0 ? Math.max(...validSamples) : 0;
+
+    const range = maxVal - minVal;
+    const stabilityVal = avg > 0 ? Math.max(0, Math.min(100, 100 * (1 - range / (2 * avg)))) : 0;
+
+    setParamIntensity(`${avg.toFixed(2)}`);
+    setParamAveragePower(`${avg.toFixed(2)}`);
+    setParamLoss('0.00');
+    setParamStability(`${stabilityVal.toFixed(2)}`);
+    setParamMin(`${minVal.toFixed(2)}`);
+    setParamMax(`${maxVal.toFixed(2)}`);
+    setParamTolerance('2.00');
+    setParamReadingTime(`${readingTimeSec.toFixed(2)}`);
+
+    setIsCapturing(false);
+    setJointStatus('Running');
+    samplesReceivedRef.current = true;
+  }, []);
+
+  // Subscribe to ESP32 Capture Protocol Events & Hardware Switch
+  useEffect(() => {
+    const unsubCapEvents = esp32Service.subscribeCaptureEvents((evt) => {
+      if (evt.type === 'CAPTURE_STARTED') {
+        setIsCapturing(true);
+        setCaptureCountdown(5);
+        samplesReceivedRef.current = false;
+      } else if (evt.type === 'MEASUREMENT_RESULT') {
+        const result = evt.payload;
+        // Validate 100 sample count and device metadata
+        if (result.sample_count !== 100) {
+          alert(`❌ INVALID CAPTURE PACKET: ESP32 returned sample_count = ${result.sample_count}. Expected exactly 100 samples.`);
+          setIsCapturing(false);
+          return;
+        }
+
+        // Dual Calculation Verification Step (PC vs ESP32)
+        if (result.raw_samples && result.raw_samples.length === 100) {
+          const pcSum = result.raw_samples.reduce((a, b) => a + Number(b), 0);
+          const pcAvg = Number((pcSum / 100).toFixed(2));
+          const delta = Math.abs(pcAvg - result.average_power);
+          console.log(`[DUAL-VERIFICATION] Reference Capture - ESP32 Avg: ${result.average_power} W | PC Recalc Avg: ${pcAvg} W | Delta: ${delta.toFixed(4)} W`);
+        }
+
+        // Update UI directly from ESP32 Measurement Engine Packet
+        setParamIntensity(`${result.intensity.toFixed(2)}`);
+        setParamAveragePower(`${result.average_power.toFixed(2)}`);
+        setParamLoss(`${result.optical_loss.toFixed(2)}`);
+        setParamStability(`${result.stability.toFixed(2)}`);
+        setParamMin(`${result.min_power.toFixed(2)}`);
+        setParamMax(`${result.max_power.toFixed(2)}`);
+        setParamTolerance(`${result.tolerance.toFixed(2)}`);
+        setParamReadingTime(`${result.reading_time.toFixed(2)}`);
+
+        setIsCapturing(false);
+        setJointStatus('Running');
+        samplesReceivedRef.current = true;
+      } else if (evt.type === 'SAMPLES') {
+        const { samples, reading_time } = evt.payload;
+        if (Array.isArray(samples) && samples.length === 100 && !samplesReceivedRef.current) {
+          processReferenceSamples(samples.map(s => Number(s)), reading_time || 5.0);
+        }
+      } else if (evt.type === 'CAPTURE_COMPLETE') {
+        setIsCapturing(false);
+      }
+    });
+
+    const unsubHW = esp32Service.subscribeHardwareEvents((event) => {
+      if (event === 'CAPTURE') {
+        handleCaptureReading();
+      }
+    });
+
+    return () => {
+      unsubCapEvents();
+      unsubHW();
+    };
+  }, [processReferenceSamples]);
+
   // REFERENCE READING ACTIONS (Column 3)
   const handleCaptureReading = async () => {
+    if (isCapturing) return;
+
+    // MANDATORY HARDWARE CHECK: No capture without real connected & verified ESP32
+    const currentEspStatus = esp32Service.getStatus();
+    if (!currentEspStatus.connected || !esp32Service.getIsRealHardwareConnected()) {
+      alert("❌ ESP32 NOT CONNECTED\n\nCannot perform reference capture because no physical ESP32-S3 hardware is connected and verified.\n\nPlease connect real hardware via USB COM Port or Wi-Fi before capturing.");
+      return;
+    }
+
     setIsCapturing(true);
     setCaptureCountdown(5);
+    samplesReceivedRef.current = false;
+
+    const capId = `REF_${Date.now().toString().slice(-4)}`;
 
     try {
-      await esp32Service.sendRawCommand('<CAP>');
-    } catch (e) {
-      console.warn('ESP32 command failed:', e);
+      await esp32Service.sendRawCommand(`CAPTURE:{"capture_id":"${capId}","reference_power":0}`);
+    } catch (e: any) {
+      alert(`ESP32 Reference Capture Transmission Failed: ${e.message || e}`);
+      setIsCapturing(false);
+      return;
     }
 
     const timer = setInterval(() => {
       setCaptureCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Set photodiode reference values
-          const baseP = currentModel?.ratedPowerW || 23.5;
-          setParamIntensity('100.0');
-          setParamAveragePower(`${(baseP * 0.995).toFixed(2)}`);
-          setParamLoss('1.50');
-          setParamStability('98.62');
-          setParamMin(`${(baseP * 0.98).toFixed(2)}`);
-          setParamMax(`${(baseP * 1.01).toFixed(2)}`);
-          setParamTolerance('2.00');
-          setParamReadingTime('5.00');
-
-          setIsCapturing(false);
-          setJointStatus('Running');
+          if (!samplesReceivedRef.current) {
+            setIsCapturing(false);
+            alert("❌ CAPTURE TIMEOUT: Real ESP32 did not transmit 100 SAMPLES packet within 5 seconds.");
+          }
           return 0;
         }
         return prev - 1;

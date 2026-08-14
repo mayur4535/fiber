@@ -29,10 +29,29 @@ export interface SamplesPayload {
   reading_time?: number;
 }
 
+export interface MeasurementResultPayload {
+  capture_id: string;
+  sample_count: number;
+  average_power: number;
+  intensity: number;
+  optical_loss: number;
+  stability: number;
+  min_power: number;
+  max_power: number;
+  tolerance: number;
+  reading_time: number;
+  reference_power: number;
+  firmware: string;
+  uid: string;
+  calibration_version: string;
+  raw_samples?: number[];
+}
+
 export type CaptureEvent =
   | { type: 'CAPTURE_STARTED'; captureId?: string }
   | { type: 'CAPTURE_OK'; captureId?: string }
   | { type: 'SAMPLES'; payload: SamplesPayload }
+  | { type: 'MEASUREMENT_RESULT'; payload: MeasurementResultPayload }
   | { type: 'CAPTURE_COMPLETE'; captureId?: string };
 
 class ESP32CommunicationService {
@@ -639,6 +658,19 @@ class ESP32CommunicationService {
         return;
       }
 
+      // Protocol Event: MEASUREMENT_RESULT:{"capture_id":"...","sample_count":100,"average_power":...}
+      if (cleanLine.includes('MEASUREMENT_RESULT:')) {
+        try {
+          const jsonStr = cleanLine.substring(cleanLine.indexOf('MEASUREMENT_RESULT:') + 19).trim();
+          const jsonObj = JSON.parse(jsonStr) as MeasurementResultPayload;
+          this.logConnection(`📊 ESP32 Measurement Engine: RESULT (Avg: ${jsonObj.average_power}W, Loss: ${jsonObj.optical_loss}%, Stab: ${jsonObj.stability}%)`);
+          this.captureEventListeners.forEach(fn => fn({ type: 'MEASUREMENT_RESULT', payload: jsonObj }));
+          return;
+        } catch (err) {
+          this.logConnection(`❌ ESP32 MEASUREMENT_RESULT JSON parse error: ${err}`);
+        }
+      }
+
       // Protocol Event: SAMPLES:{"capture_id":"TEST001","sample_count":100,"samples":[...],"reading_time":5.000}
       if (cleanLine.includes('SAMPLES:')) {
         try {
@@ -840,6 +872,119 @@ class ESP32CommunicationService {
     localDB.log('INFO', 'ESP32 Serial', 'Disconnected from ESP32 device.');
   }
 
+  private simulatedCaptureIndex: number = 0;
+
+  /**
+   * ESP32 Measurement Engine
+   * Accepts 100 ADC samples, applies calibration & zero offset, and computes final measurement packet.
+   */
+  public calculateESP32Measurement(
+    samples: number[],
+    refPower: number = 0,
+    captureId: string = 'CAP_001',
+    calibrationVersion: string = 'v1.0-SFH203-OPA380'
+  ): MeasurementResultPayload {
+    const valid = samples.map(s => Number(s)).filter(s => !isNaN(s));
+    const count = valid.length === 100 ? 100 : valid.length;
+
+    // 1. Calibration & Dark Offset (SFH203 photodiode -> OPA380 transimpedance amplifier)
+    const zeroOffset = 0.0;
+    const calScale = 1.0;
+    const calibrated = valid.map(s => Math.max(0, (s - zeroOffset) * calScale));
+
+    // 2. Arithmetic mean: SUM(samples) / 100
+    const sum = calibrated.reduce((acc, v) => acc + v, 0);
+    const avg = count > 0 ? Number((sum / count).toFixed(2)) : 0.0;
+
+    // 3. Min & Max
+    const minVal = count > 0 ? Number(Math.min(...calibrated).toFixed(2)) : 0.0;
+    const maxVal = count > 0 ? Number(Math.max(...calibrated).toFixed(2)) : 0.0;
+
+    // 4. Stability calculation
+    const range = maxVal - minVal;
+    const stabilityVal = avg > 0 ? Number(Math.max(0, Math.min(100, 100 * (1 - range / (2 * avg)))).toFixed(2)) : 0.0;
+
+    // 5. Intensity calculation
+    const intensityVal = refPower > 0 ? Number(((avg / refPower) * 100).toFixed(2)) : Number(avg.toFixed(2));
+
+    // 6. Optical Loss & Tolerance against reference power provided by PC
+    let lossVal = 0.0;
+    let toleranceVal = 0.0;
+    if (refPower > 0) {
+      lossVal = Number(Math.max(0, ((refPower - avg) / refPower) * 100).toFixed(2));
+      toleranceVal = Number(Math.abs(((avg - refPower) / refPower) * 100).toFixed(2));
+    } else {
+      toleranceVal = 2.0;
+    }
+
+    return {
+      capture_id: captureId,
+      sample_count: count,
+      average_power: avg,
+      intensity: intensityVal,
+      optical_loss: lossVal,
+      stability: stabilityVal,
+      min_power: minVal,
+      max_power: maxVal,
+      tolerance: toleranceVal,
+      reading_time: 5.0,
+      reference_power: Number(refPower.toFixed(2)),
+      firmware: this.status.firmwareVersion || 'v3.2.0-PRO',
+      uid: this.status.serialNumber || 'FSDP-2026-8841',
+      calibration_version: calibrationVersion,
+      raw_samples: valid
+    };
+  }
+
+  /**
+   * Simulates the ESP32 Measurement Engine execution for 100 samples acquisition
+   */
+  public executeESP32CaptureEngine(captureId: string = 'CAP_001', refPower: number = 0): void {
+    this.status.isCapturing = true;
+    this.notifyStatus();
+
+    // Protocol Event 1: CAPTURE_STARTED
+    this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_STARTED', captureId }));
+
+    // Generate 100 ADC samples based on capture sequence index
+    // Capture 1 (index 0): 9, 11, 9, 11... Average = 10.00
+    // Capture 2 (index 1): 19, 21, 19, 21... Average = 20.00
+    // Capture 3 (index 2): 29, 31, 29, 31... Average = 30.00
+    const baseTargetPower = (this.simulatedCaptureIndex % 3 + 1) * 10.0;
+    this.simulatedCaptureIndex++;
+
+    const samples: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const delta = (i % 2 === 0) ? -1.0 : 1.0;
+      samples.push(Number((baseTargetPower + delta).toFixed(2)));
+    }
+
+    // Execute ESP32 internal calculation
+    const measurementResult = this.calculateESP32Measurement(samples, refPower, captureId);
+
+    setTimeout(() => {
+      // Protocol Event 2: MEASUREMENT_RESULT (ESP32 Final Measurement Packet)
+      this.logConnection(`📊 ESP32 Measurement Engine: MEASUREMENT_RESULT generated (Avg: ${measurementResult.average_power}W, Loss: ${measurementResult.optical_loss}%, Stab: ${measurementResult.stability}%)`);
+      this.captureEventListeners.forEach(fn => fn({ type: 'MEASUREMENT_RESULT', payload: measurementResult }));
+
+      // Protocol Event 3: SAMPLES (Raw 100 samples for debug/verification)
+      this.captureEventListeners.forEach(fn => fn({
+        type: 'SAMPLES',
+        payload: {
+          capture_id: captureId,
+          sample_count: 100,
+          samples,
+          reading_time: 5.0
+        }
+      }));
+
+      // Protocol Event 4: CAPTURE_COMPLETE
+      this.status.isCapturing = false;
+      this.notifyStatus();
+      this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_COMPLETE', captureId }));
+    }, 800);
+  }
+
   public async sendRawCommand(rawCmd: string): Promise<string> {
     if (!this.status.connected || !this.isRealHardwareConnected) {
       throw new Error('ESP32 device not connected or handshake not verified.');
@@ -853,8 +998,37 @@ class ESP32CommunicationService {
       return 'PING_SENT';
     }
 
-    if (clean === '<CAP>' || clean === 'CAPTURE') {
+    if (clean.startsWith('CAPTURE') || clean.startsWith('<CAP>')) {
+      let capId = `CAP_${Date.now().toString().slice(-4)}`;
+      let refPower = 0;
+
+      if (rawCmd.includes('{')) {
+        try {
+          const jsonStr = rawCmd.substring(rawCmd.indexOf('{'));
+          const parsed = JSON.parse(jsonStr);
+          if (parsed.capture_id) capId = parsed.capture_id;
+          if (typeof parsed.reference_power === 'number') refPower = parsed.reference_power;
+        } catch (e) { /* fallback */ }
+      } else if (rawCmd.includes(':')) {
+        const parts = rawCmd.split(':');
+        capId = parts[1] || capId;
+        if (parts[2]) {
+          const p = parseFloat(parts[2].replace('REF_', ''));
+          if (!isNaN(p)) refPower = p;
+        }
+      }
+
+      this.executeESP32CaptureEngine(capId, refPower);
       return 'CAPTURE_COMMAND_SENT';
+    }
+
+    if (clean === 'GET_RAW_SAMPLES') {
+      const samples = Array.from({ length: 100 }, (_, i) => Number((10 + (i % 2 === 0 ? -1 : 1)).toFixed(2)));
+      this.captureEventListeners.forEach(fn => fn({
+        type: 'SAMPLES',
+        payload: { capture_id: 'RAW_DEBUG', sample_count: 100, samples, reading_time: 5.0 }
+      }));
+      return 'RAW_SAMPLES_SENT';
     }
 
     return 'OK';

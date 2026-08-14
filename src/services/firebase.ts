@@ -12,12 +12,21 @@ import {
   setDoc,
   getDoc
 } from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  User 
+} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 const dbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
 export const db = getFirestore(app, dbId);
+export const auth = getAuth(app);
 
 export interface FirebaseTestLog {
   id?: string;
@@ -32,17 +41,87 @@ export interface FirebaseTestLog {
   notes?: string;
 }
 
+// AUTHENTICATION HELPERS
+export async function loginWithEmail(email: string, pass: string): Promise<User> {
+  const userCred = await signInWithEmailAndPassword(auth, email, pass);
+  return userCred.user;
+}
+
+export async function signUpWithEmail(email: string, pass: string): Promise<User> {
+  const userCred = await createUserWithEmailAndPassword(auth, email, pass);
+  return userCred.user;
+}
+
+export async function logoutUser(): Promise<void> {
+  await signOut(auth);
+}
+
+export function subscribeAuthState(callback: (user: User | null) => void): () => void {
+  return onAuthStateChanged(auth, callback);
+}
+
+export function getCurrentUser(): User | null {
+  return auth.currentUser;
+}
+
+// USER-ISOLATED CLOUD FIRESTORE STORAGE HELPERS (/users/{uid}/app_data/{key})
+export async function saveUserDataToCloud(uid: string, key: string, payload: any): Promise<void> {
+  if (!uid) return;
+  const docRef = doc(db, 'users', uid, 'app_data', key);
+  await setDoc(docRef, {
+    data: payload,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+export async function fetchUserDataFromCloud(uid: string, key: string): Promise<any | null> {
+  if (!uid) return null;
+  const docRef = doc(db, 'users', uid, 'app_data', key);
+  const snap = await getDoc(docRef);
+  if (snap.exists()) {
+    return snap.data()?.data || null;
+  }
+  return null;
+}
+
+export async function fetchAllUserDataFromCloud(uid: string): Promise<Record<string, any>> {
+  if (!uid) return {};
+  const keys = ['models', 'reports', 'settings', 'calibration', 'pendingTests'];
+  const results: Record<string, any> = {};
+
+  for (const key of keys) {
+    try {
+      const data = await fetchUserDataFromCloud(uid, key);
+      if (data) {
+        results[key] = data;
+      }
+    } catch (e) {
+      console.warn(`Failed to fetch cloud key ${key}:`, e);
+    }
+  }
+
+  return results;
+}
+
 /**
  * Save test log record to online Firebase Firestore database
  */
 export async function saveTestLogToCloud(logData: Omit<FirebaseTestLog, 'id'>) {
   try {
-    const docRef = await addDoc(collection(db, 'test_logs'), {
-      ...logData,
-      createdAt: serverTimestamp()
-    });
-    console.log("Successfully saved test log to Firebase Cloud Firestore with ID:", docRef.id);
-    return docRef.id;
+    const user = auth.currentUser;
+    if (user) {
+      const docRef = await addDoc(collection(db, 'users', user.uid, 'test_logs'), {
+        ...logData,
+        createdAt: serverTimestamp()
+      });
+      return docRef.id;
+    } else {
+      const docRef = await addDoc(collection(db, 'test_logs'), {
+        ...logData,
+        createdAt: serverTimestamp()
+      });
+      return docRef.id;
+    }
   } catch (error) {
     console.error("Error saving test log to Firebase Cloud Firestore:", error);
     throw error;
@@ -54,7 +133,9 @@ export async function saveTestLogToCloud(logData: Omit<FirebaseTestLog, 'id'>) {
  */
 export async function fetchCloudTestLogs(maxResults = 50): Promise<FirebaseTestLog[]> {
   try {
-    const q = query(collection(db, 'test_logs'), orderBy('createdAt', 'desc'), limit(maxResults));
+    const user = auth.currentUser;
+    const colRef = user ? collection(db, 'users', user.uid, 'test_logs') : collection(db, 'test_logs');
+    const q = query(colRef, orderBy('createdAt', 'desc'), limit(maxResults));
     const querySnapshot = await getDocs(q);
     const logs: FirebaseTestLog[] = [];
     querySnapshot.forEach((docSnap) => {
@@ -72,11 +153,15 @@ export async function fetchCloudTestLogs(maxResults = 50): Promise<FirebaseTestL
  */
 export async function saveSettingsToCloud(settingsData: any) {
   try {
-    await setDoc(doc(db, 'settings', 'global_config'), {
-      ...settingsData,
-      updatedAt: new Date().toISOString()
-    });
-    console.log("Saved global settings to Cloud Firestore");
+    const user = auth.currentUser;
+    if (user) {
+      await saveUserDataToCloud(user.uid, 'settings', settingsData);
+    } else {
+      await setDoc(doc(db, 'settings', 'global_config'), {
+        ...settingsData,
+        updatedAt: new Date().toISOString()
+      });
+    }
   } catch (error) {
     console.error("Error saving settings to Cloud Firestore:", error);
   }
@@ -87,6 +172,10 @@ export async function saveSettingsToCloud(settingsData: any) {
  */
 export async function fetchCloudSettings() {
   try {
+    const user = auth.currentUser;
+    if (user) {
+      return await fetchUserDataFromCloud(user.uid, 'settings');
+    }
     const docSnap = await getDoc(doc(db, 'settings', 'global_config'));
     if (docSnap.exists()) {
       return docSnap.data();

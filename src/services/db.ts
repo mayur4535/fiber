@@ -1,5 +1,5 @@
 /**
- * Offline Local Storage & IndexedDB Service
+ * Offline Local Storage & IndexedDB / Firebase Sync Service
  * Fiber Source Diagnostic Pro
  */
 
@@ -12,7 +12,13 @@ import {
   PendingTestSession
 } from '../types';
 import { DEFAULT_FIBER_MODELS } from '../data/defaultModels';
-import { saveTestLogToCloud, saveSettingsToCloud } from './firebase';
+import { 
+  saveTestLogToCloud, 
+  saveSettingsToCloud, 
+  auth, 
+  saveUserDataToCloud, 
+  fetchAllUserDataFromCloud 
+} from './firebase';
 
 const STORAGE_KEYS = {
   MODELS: 'fsdp_models_v1',
@@ -49,6 +55,13 @@ const DEFAULT_CALIBRATION: CalibrationData = {
   freqGainFactor: 1.0,
   verified: true
 };
+
+export interface SyncResult {
+  success: boolean;
+  status: 'synced' | 'local_mode' | 'auth_required' | 'offline' | 'error';
+  message: string;
+  updatedCount?: number;
+}
 
 class LocalDBService {
   constructor() {
@@ -104,6 +117,11 @@ class LocalDBService {
   public saveModels(models: FiberModel[]): void {
     try {
       localStorage.setItem(STORAGE_KEYS.MODELS, JSON.stringify(models));
+      const user = auth.currentUser;
+      const settings = this.getSettings();
+      if (user && settings.storageMode !== 'local') {
+        saveUserDataToCloud(user.uid, 'models', models).catch((err) => console.warn('Cloud sync error for models:', err));
+      }
     } catch (e) {
       console.error('Failed to save models:', e);
     }
@@ -112,13 +130,16 @@ class LocalDBService {
   public saveModel(model: FiberModel): void {
     const models = this.getModels();
     const idx = models.findIndex((m) => m.id === model.id);
+    const updatedModel = {
+      ...model,
+      modifiedDate: new Date().toISOString()
+    };
     if (idx >= 0) {
-      models[idx] = { ...model, modifiedDate: new Date().toISOString() };
+      models[idx] = updatedModel;
     } else {
       models.push({
-        ...model,
-        createdDate: new Date().toISOString(),
-        modifiedDate: new Date().toISOString()
+        ...updatedModel,
+        createdDate: new Date().toISOString()
       });
     }
     this.saveModels(models);
@@ -152,9 +173,12 @@ class LocalDBService {
       localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
       this.log('INFO', 'Report Saved', `Saved diagnostic report ${report.id}`);
 
+      const user = auth.currentUser;
       const currentSettings = this.getSettings();
-      // Sync test report to Firebase Cloud Firestore only if storageMode is not 'local'
       if (currentSettings.storageMode !== 'local') {
+        if (user) {
+          saveUserDataToCloud(user.uid, 'reports', reports).catch((err) => console.warn('Cloud sync error for reports:', err));
+        }
         saveTestLogToCloud({
           timestamp: report.timestamp,
           cableId: report.machineId || report.serialNumber || 'Fiber-Source-Cable',
@@ -168,9 +192,7 @@ class LocalDBService {
             primaryFaultLocation: report.primaryFaultLocation,
             evidenceSummary: report.evidenceSummary
           })
-        }).catch((err) => console.warn('Cloud sync error for report:', err));
-      } else {
-        console.log('Local storage mode active: saved to PC/Laptop disk storage only.');
+        }).catch((err) => console.warn('Cloud sync error for test log:', err));
       }
     } catch (e) {
       console.error('Failed to save report:', e);
@@ -180,6 +202,11 @@ class LocalDBService {
   public deleteReport(id: string): void {
     const reports = this.getReports().filter((r) => r.id !== id);
     localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reports));
+    const user = auth.currentUser;
+    const settings = this.getSettings();
+    if (user && settings.storageMode !== 'local') {
+      saveUserDataToCloud(user.uid, 'reports', reports).catch((err) => console.warn('Cloud sync error for reports:', err));
+    }
   }
 
   // --- PENDING TEST (AUTO-SAVE & RECOVERY) ---
@@ -216,6 +243,11 @@ class LocalDBService {
         list.unshift(session);
       }
       localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(list));
+      const user = auth.currentUser;
+      const settings = this.getSettings();
+      if (user && settings.storageMode !== 'local') {
+        saveUserDataToCloud(user.uid, 'pendingTests', list).catch((err) => console.warn('Cloud sync error for pending tests:', err));
+      }
     } catch (e) {
       console.error('Failed to save pending test:', e);
     }
@@ -256,7 +288,9 @@ class LocalDBService {
   public saveSettings(settings: AppSettings): void {
     try {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
-      if (settings.storageMode !== 'local') {
+      const user = auth.currentUser;
+      if (user && settings.storageMode !== 'local') {
+        saveUserDataToCloud(user.uid, 'settings', settings).catch((err) => console.warn('Cloud sync error for settings:', err));
         saveSettingsToCloud(settings).catch((err) => console.warn('Cloud sync error for settings:', err));
       }
     } catch (e) {
@@ -278,12 +312,17 @@ class LocalDBService {
   public saveCalibration(calibration: CalibrationData): void {
     try {
       localStorage.setItem(STORAGE_KEYS.CALIBRATION, JSON.stringify(calibration));
+      const user = auth.currentUser;
+      const settings = this.getSettings();
+      if (user && settings.storageMode !== 'local') {
+        saveUserDataToCloud(user.uid, 'calibration', calibration).catch((err) => console.warn('Cloud sync error for calibration:', err));
+      }
     } catch (e) {
       console.error('Failed to save calibration:', e);
     }
   }
 
-  // --- LOGS (Optimized with In-Memory Cache & Debounced Persistence) ---
+  // --- LOGS ---
   private memoryLogs: SystemLog[] | null = null;
   private logSaveTimer: any = null;
 
@@ -323,7 +362,6 @@ class LocalDBService {
       }
     }
 
-    // Schedule debounced async save to localStorage so main thread never blocks
     if (!this.logSaveTimer) {
       this.logSaveTimer = setTimeout(() => {
         try {
@@ -348,40 +386,210 @@ class LocalDBService {
     localStorage.removeItem(STORAGE_KEYS.LOGS);
   }
 
-  // --- BACKUP & RESTORE ---
+  // --- CLOUD SYNC ENGINE WITH CONFLIC RESOLUTION ---
+  public async syncWithCloud(): Promise<SyncResult> {
+    const settings = this.getSettings();
+    if (settings.storageMode === 'local') {
+      return {
+        success: true,
+        status: 'local_mode',
+        message: 'Local PC Storage active. Cloud sync skipped.'
+      };
+    }
+
+    const user = auth.currentUser;
+    if (!user) {
+      return {
+        success: false,
+        status: 'auth_required',
+        message: 'Please log in to Firebase account to sync data.'
+      };
+    }
+
+    try {
+      const cloudData = await fetchAllUserDataFromCloud(user.uid);
+      let updatedCount = 0;
+
+      // 1. Models Sync
+      if (Array.isArray(cloudData.models) && cloudData.models.length > 0) {
+        const localModels = this.getModels();
+        const mergedModelsMap = new Map<string, FiberModel>();
+        localModels.forEach(m => mergedModelsMap.set(m.id, m));
+
+        cloudData.models.forEach((cloudM: FiberModel) => {
+          const localM = mergedModelsMap.get(cloudM.id);
+          if (!localM) {
+            mergedModelsMap.set(cloudM.id, cloudM);
+            updatedCount++;
+          } else {
+            const cloudDate = new Date(cloudM.modifiedDate || cloudM.createdDate || 0).getTime();
+            const localDate = new Date(localM.modifiedDate || localM.createdDate || 0).getTime();
+            if (cloudDate > localDate) {
+              mergedModelsMap.set(cloudM.id, cloudM);
+              updatedCount++;
+            }
+          }
+        });
+
+        const mergedModels = Array.from(mergedModelsMap.values());
+        localStorage.setItem(STORAGE_KEYS.MODELS, JSON.stringify(mergedModels));
+        saveUserDataToCloud(user.uid, 'models', mergedModels).catch(() => {});
+      } else {
+        const localModels = this.getModels();
+        if (localModels.length > 0) {
+          saveUserDataToCloud(user.uid, 'models', localModels).catch(() => {});
+        }
+      }
+
+      // 2. Reports Sync
+      if (Array.isArray(cloudData.reports) && cloudData.reports.length > 0) {
+        const localReports = this.getReports();
+        const mergedReportsMap = new Map<string, DiagnosisReport>();
+        localReports.forEach(r => mergedReportsMap.set(r.id, r));
+
+        cloudData.reports.forEach((cloudR: DiagnosisReport) => {
+          const localR = mergedReportsMap.get(cloudR.id);
+          if (!localR) {
+            mergedReportsMap.set(cloudR.id, cloudR);
+            updatedCount++;
+          }
+        });
+
+        const mergedReports = Array.from(mergedReportsMap.values());
+        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(mergedReports));
+        saveUserDataToCloud(user.uid, 'reports', mergedReports).catch(() => {});
+      } else {
+        const localReports = this.getReports();
+        if (localReports.length > 0) {
+          saveUserDataToCloud(user.uid, 'reports', localReports).catch(() => {});
+        }
+      }
+
+      // 3. Settings Sync
+      if (cloudData.settings && typeof cloudData.settings === 'object') {
+        const mergedSettings = { ...this.getSettings(), ...cloudData.settings };
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mergedSettings));
+      } else {
+        saveUserDataToCloud(user.uid, 'settings', settings).catch(() => {});
+      }
+
+      // 4. Calibration Sync
+      if (cloudData.calibration && typeof cloudData.calibration === 'object') {
+        const mergedCalibration = { ...this.getCalibration(), ...cloudData.calibration };
+        localStorage.setItem(STORAGE_KEYS.CALIBRATION, JSON.stringify(mergedCalibration));
+      } else {
+        saveUserDataToCloud(user.uid, 'calibration', this.getCalibration()).catch(() => {});
+      }
+
+      this.log('INFO', 'Cloud Sync', `Firebase cloud sync completed successfully. Updated ${updatedCount} records.`);
+
+      return {
+        success: true,
+        status: 'synced',
+        message: 'Firebase Cloud sync complete!',
+        updatedCount
+      };
+    } catch (e: any) {
+      console.error('Firebase cloud sync error:', e);
+      return {
+        success: false,
+        status: 'offline',
+        message: `Firebase Offline / Connection Failed: ${e.message || 'Network error'}`
+      };
+    }
+  }
+
+  // --- VERSIONED BACKUP EXPORT & IMPORT ---
   public exportFullDatabaseJSON(): string {
     const exportData = {
-      version: '1.0.0',
+      format: 'FSDP_DATA_EXPORT',
+      schemaVersion: '1.0',
       exportedAt: new Date().toISOString(),
-      models: this.getModels(),
-      reports: this.getReports(),
-      settings: this.getSettings(),
-      calibration: this.getCalibration(),
-      logs: this.getLogs()
+      applicationVersion: '3.2.0',
+      data: {
+        models: this.getModels(),
+        reports: this.getReports(),
+        settings: this.getSettings(),
+        calibration: this.getCalibration(),
+        pendingTests: this.getPendingTests(),
+        logs: this.getLogs()
+      }
     };
     return JSON.stringify(exportData, null, 2);
   }
 
-  public importFullDatabaseJSON(jsonStr: string): boolean {
+  public importFullDatabaseJSON(jsonStr: string): { success: boolean; message: string } {
     try {
-      const data = JSON.parse(jsonStr);
-      if (data.models && Array.isArray(data.models)) {
-        this.saveModels(data.models);
+      if (!jsonStr || typeof jsonStr !== 'string') {
+        return { success: false, message: 'Invalid file format: empty or non-string input.' };
       }
-      if (data.reports && Array.isArray(data.reports)) {
-        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(data.reports));
+
+      const parsed = JSON.parse(jsonStr);
+
+      // Handle both v1.0 schema format and legacy raw JSON format
+      let modelsData = null;
+      let reportsData = null;
+      let settingsData = null;
+      let calibrationData = null;
+      let pendingData = null;
+
+      if (parsed && parsed.format === 'FSDP_DATA_EXPORT' && parsed.data) {
+        modelsData = parsed.data.models;
+        reportsData = parsed.data.reports;
+        settingsData = parsed.data.settings;
+        calibrationData = parsed.data.calibration;
+        pendingData = parsed.data.pendingTests;
+      } else if (parsed && typeof parsed === 'object') {
+        modelsData = parsed.models;
+        reportsData = parsed.reports;
+        settingsData = parsed.settings;
+        calibrationData = parsed.calibration;
+        pendingData = parsed.pendingTests;
+      } else {
+        return { success: false, message: 'Invalid / Corrupted Backup File: Unrecognized format.' };
       }
-      if (data.settings) {
-        this.saveSettings(data.settings);
+
+      // Validate models structure if present
+      if (modelsData) {
+        if (!Array.isArray(modelsData)) {
+          return { success: false, message: 'Corrupted Backup: "models" field must be an array.' };
+        }
+        for (const m of modelsData) {
+          if (!m.id || !m.name || !Array.isArray(m.cycles)) {
+            return { success: false, message: 'Corrupted Backup: Invalid FiberModel structure detected.' };
+          }
+        }
+        this.saveModels(modelsData);
       }
-      if (data.calibration) {
-        this.saveCalibration(data.calibration);
+
+      if (reportsData && Array.isArray(reportsData)) {
+        localStorage.setItem(STORAGE_KEYS.REPORTS, JSON.stringify(reportsData));
       }
-      this.log('INFO', 'Database Import', 'Full database successfully imported from backup file.');
-      return true;
-    } catch (e) {
+
+      if (settingsData && typeof settingsData === 'object') {
+        this.saveSettings(settingsData);
+      }
+
+      if (calibrationData && typeof calibrationData === 'object') {
+        this.saveCalibration(calibrationData);
+      }
+
+      if (pendingData && Array.isArray(pendingData)) {
+        localStorage.setItem(STORAGE_KEYS.PENDING_TEST, JSON.stringify(pendingData));
+      }
+
+      this.log('INFO', 'Database Import', 'Full database successfully restored from verified backup file.');
+
+      // Trigger cloud sync if in Firebase mode
+      const currentSettings = this.getSettings();
+      if (currentSettings.storageMode !== 'local' && auth.currentUser) {
+        this.syncWithCloud().catch(() => {});
+      }
+
+      return { success: true, message: 'Backup imported successfully! All records restored.' };
+    } catch (e: any) {
       console.error('Failed to import database:', e);
-      return false;
+      return { success: false, message: `Import Failed: ${e.message || 'Corrupted JSON file'}` };
     }
   }
 
@@ -391,6 +599,7 @@ class LocalDBService {
     localStorage.removeItem(STORAGE_KEYS.SETTINGS);
     localStorage.removeItem(STORAGE_KEYS.CALIBRATION);
     localStorage.removeItem(STORAGE_KEYS.LOGS);
+    localStorage.removeItem(STORAGE_KEYS.PENDING_TEST);
     this.initDefaultData();
   }
 }
