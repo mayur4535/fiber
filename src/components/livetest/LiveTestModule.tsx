@@ -518,6 +518,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const captureJointRef = useRef<JointType>('Before');
   const captureStepIdRef = useRef<string>('');
   const captureCycleIdRef = useRef<string>('');
+  const processedCaptureIdsRef = useRef<Set<string>>(new Set());
 
   // Live Captured parameters (7 required metrics)
   const [capturedParams, setCapturedParams] = useState<{
@@ -845,7 +846,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
   // --- NEW CAPTURE PROTOCOL ENGINE (100 SAMPLES ARITHMETIC MEAN) ---
   const processCapturedSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
-    if (!Array.isArray(samples) || samples.length === 0) return;
+    if (!Array.isArray(samples) || samples.length === 0 || samplesReceivedRef.current) return;
 
     // Lock target joint to the immutable capture context
     const targetJoint = captureJointRef.current || selectedJoint;
@@ -933,11 +934,20 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           return;
         }
 
+        // Lock by capture_id: prevent duplicate processing or second updates
+        if (result.capture_id && processedCaptureIdsRef.current.has(result.capture_id)) {
+          console.log(`[LOCK] Ignoring duplicate MEASUREMENT_RESULT for capture_id: ${result.capture_id}`);
+          return;
+        }
+        if (result.capture_id) {
+          processedCaptureIdsRef.current.add(result.capture_id);
+        }
+
         const targetJoint = captureJointRef.current || selectedJoint;
         const targetStepId = captureStepIdRef.current || activeStepId;
         const targetCycleId = captureCycleIdRef.current || activeCycleId;
 
-        // Dual Calculation Verification Step (PC vs ESP32)
+        // Raw samples for diagnostics view ONLY
         if (result.raw_samples && result.raw_samples.length === 100) {
           const pcSum = result.raw_samples.reduce((a, b) => a + Number(b), 0);
           const pcAvg = Number((pcSum / 100).toFixed(2));
@@ -956,16 +966,15 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           });
         }
 
-        // Update UI directly from ESP32 Final Measurement Packet
-        const hasRef = result.reference_power > 0;
+        // DIRECT PLACEMENT: Map ESP32 Final Measurement Packet fields directly without recalculations or overrides
         const newParams = {
           intensity: `${result.intensity.toFixed(2)} %`,
           averagePower: `${result.average_power.toFixed(2)} W`,
-          loss: hasRef ? `${result.optical_loss.toFixed(2)} %` : 'Ref N/A',
+          loss: `${result.optical_loss.toFixed(2)} %`,
           stability: `${result.stability.toFixed(2)} %`,
           minimum: `${result.min_power.toFixed(2)} W`,
           maximum: `${result.max_power.toFixed(2)} W`,
-          tolerance: hasRef ? `${result.tolerance.toFixed(2)} %` : 'Ref N/A',
+          tolerance: `${result.tolerance.toFixed(2)} %`,
           readingTime: `${result.reading_time.toFixed(2)} s`
         };
 
@@ -989,7 +998,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         }));
       } else if (evt.type === 'SAMPLES') {
         const { capture_id, samples, reading_time } = evt.payload;
-        if (Array.isArray(samples) && samples.length === 100 && !samplesReceivedRef.current) {
+        if (Array.isArray(samples) && samples.length === 100) {
           const validNumSamples = samples.map(s => Number(s));
           setRawSamplesData({
             captureId: capture_id || `CAP_${Date.now().toString().slice(-4)}`,
@@ -1001,7 +1010,12 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
             deviceUid: espStatus.serialNumber || 'ESP32-S3-UID',
             connectionType: espStatus.connectionType
           });
-          processCapturedSamples(validNumSamples, reading_time || 5.0);
+
+          // Do NOT recalculate or overwrite if MEASUREMENT_RESULT was already received or capture is locked
+          const isLocked = capture_id ? processedCaptureIdsRef.current.has(capture_id) : false;
+          if (!samplesReceivedRef.current && !isLocked) {
+            processCapturedSamples(validNumSamples, reading_time || 5.0);
+          }
         }
       } else if (evt.type === 'CAPTURE_COMPLETE') {
         setIsCapturing(false);

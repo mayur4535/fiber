@@ -125,6 +125,7 @@ export const ModelManagerModule: React.FC<ModelManagerModuleProps> = ({
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
   const [captureCountdown, setCaptureCountdown] = useState<number>(0);
   const samplesReceivedRef = useRef<boolean>(false);
+  const processedCaptureIdsRef = useRef<Set<string>>(new Set());
   const [capturedParams, setCapturedParams] = useState<ReadingParameters>({
     intensity: 99.5,
     frequency: 30,
@@ -597,7 +598,7 @@ export const ModelManagerModule: React.FC<ModelManagerModuleProps> = ({
 
   // Process 100 raw samples received from verified ESP32
   const processReferenceSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
-    if (!Array.isArray(samples) || samples.length === 0) return;
+    if (!Array.isArray(samples) || samples.length === 0 || samplesReceivedRef.current) return;
 
     // Validate 100 numeric samples
     const validSamples = samples.map(s => Number(s)).filter(s => !isNaN(s));
@@ -646,6 +647,15 @@ export const ModelManagerModule: React.FC<ModelManagerModuleProps> = ({
           return;
         }
 
+        // Lock by capture_id: prevent duplicate processing or second updates
+        if (result.capture_id && processedCaptureIdsRef.current.has(result.capture_id)) {
+          console.log(`[LOCK] Model Manager - Ignoring duplicate MEASUREMENT_RESULT for capture_id: ${result.capture_id}`);
+          return;
+        }
+        if (result.capture_id) {
+          processedCaptureIdsRef.current.add(result.capture_id);
+        }
+
         // Dual Calculation Verification
         if (result.raw_samples && result.raw_samples.length === 100) {
           const pcSum = result.raw_samples.reduce((a, b) => a + Number(b), 0);
@@ -654,6 +664,7 @@ export const ModelManagerModule: React.FC<ModelManagerModuleProps> = ({
           console.log(`[DUAL-VERIFICATION] Model Manager Reference - ESP32 Avg: ${result.average_power} W | PC Recalc Avg: ${pcAvg} W | Delta: ${delta.toFixed(4)} W`);
         }
 
+        // DIRECT PLACEMENT: Map ESP32 Final Measurement Packet directly
         const newParams: ReadingParameters = {
           intensity: result.intensity,
           frequency: capturedParams.frequency || 30,
@@ -673,9 +684,12 @@ export const ModelManagerModule: React.FC<ModelManagerModuleProps> = ({
         setIsCapturing(false);
         samplesReceivedRef.current = true;
       } else if (evt.type === 'SAMPLES') {
-        const { samples, reading_time } = evt.payload;
-        if (Array.isArray(samples) && samples.length === 100 && !samplesReceivedRef.current) {
-          processReferenceSamples(samples.map(s => Number(s)), reading_time || 5.0);
+        const { capture_id, samples, reading_time } = evt.payload;
+        if (Array.isArray(samples) && samples.length === 100) {
+          const isLocked = capture_id ? processedCaptureIdsRef.current.has(capture_id) : false;
+          if (!samplesReceivedRef.current && !isLocked) {
+            processReferenceSamples(samples.map(s => Number(s)), reading_time || 5.0);
+          }
         }
       } else if (evt.type === 'CAPTURE_COMPLETE') {
         setIsCapturing(false);
