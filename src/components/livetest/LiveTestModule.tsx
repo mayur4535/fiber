@@ -514,6 +514,11 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     return null;
   }, [activeModel, activeCycleId, activeCycle, activeStepId, activeStep, selectedJoint]);
 
+  // Capture context refs to lock joint position at capture start
+  const captureJointRef = useRef<JointType>('Before');
+  const captureStepIdRef = useRef<string>('');
+  const captureCycleIdRef = useRef<string>('');
+
   // Live Captured parameters (7 required metrics)
   const [capturedParams, setCapturedParams] = useState<{
     intensity: string;
@@ -535,6 +540,48 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     readingTime: '5.00 s'
   });
 
+  // Per-Joint parameter map to isolate parameter state for Before, Upper, and After
+  const [jointParamsMap, setJointParamsMap] = useState<Record<JointType, typeof capturedParams>>({
+    Before: {
+      intensity: '100 %',
+      averagePower: '12.00 W',
+      loss: '1.85 %',
+      stability: '98.62 %',
+      minimum: '11.80 W',
+      maximum: '12.20 W',
+      tolerance: '2.00 %',
+      readingTime: '5.00 s'
+    },
+    Upper: {
+      intensity: '100 %',
+      averagePower: '12.00 W',
+      loss: '1.85 %',
+      stability: '98.62 %',
+      minimum: '11.80 W',
+      maximum: '12.20 W',
+      tolerance: '2.00 %',
+      readingTime: '5.00 s'
+    },
+    After: {
+      intensity: '100 %',
+      averagePower: '12.00 W',
+      loss: '1.85 %',
+      stability: '98.62 %',
+      minimum: '11.80 W',
+      maximum: '12.20 W',
+      tolerance: '2.00 %',
+      readingTime: '5.00 s'
+    }
+  });
+
+  // Helper to switch selected joint and synchronize parameter view
+  const handleSelectJoint = (jKey: JointType) => {
+    setSelectedJoint(jKey);
+    if (jointParamsMap[jKey]) {
+      setCapturedParams(jointParamsMap[jKey]);
+    }
+  };
+
   // State for 3 Joint readings (Before, Upper, After) to evaluate exact 4 Master Fault Cases
   const [jointReadings, setJointReadings] = useState<{ Before: number; Upper: number; After: number }>({
     Before: 12.0,
@@ -554,15 +601,6 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     deviceUid: string;
     connectionType: string;
   } | null>(null);
-
-  // Sync current selected joint reading when capturedParams.intensity or selectedJoint changes
-  useEffect(() => {
-    const liveVal = parseFloat(capturedParams.intensity) || parseFloat(capturedParams.averagePower) || 0;
-    setJointReadings(prev => ({
-      ...prev,
-      [selectedJoint]: liveVal
-    }));
-  }, [selectedJoint, capturedParams.intensity, capturedParams.averagePower]);
 
   // Parameter Bypass State for the 7 required metrics
   const [enabledParams, setEnabledParams] = useState<Record<string, boolean>>({
@@ -809,6 +847,11 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const processCapturedSamples = useCallback((samples: number[], readingTimeSec: number = 5.0) => {
     if (!Array.isArray(samples) || samples.length === 0) return;
 
+    // Lock target joint to the immutable capture context
+    const targetJoint = captureJointRef.current || selectedJoint;
+    const targetStepId = captureStepIdRef.current || activeStepId;
+    const targetCycleId = captureCycleIdRef.current || activeCycleId;
+
     // Validate 100 numeric samples
     const validSamples = samples.map(s => Number(s)).filter(s => !isNaN(s));
     const count = validSamples.length;
@@ -850,19 +893,23 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       readingTime: `${readingTimeSec.toFixed(2)} s`
     };
 
-    setCapturedParams(newParams);
+    setJointParamsMap(prev => ({ ...prev, [targetJoint]: newParams }));
+    if (selectedJoint === targetJoint) {
+      setCapturedParams(newParams);
+    }
+
     setIsCapturing(false);
     setHasCaptured(true);
     samplesReceivedRef.current = true;
 
     setJointStatuses((prev) => ({
       ...prev,
-      [`${activeCycleId}-${activeStepId}-${selectedJoint}`]: 'Captured'
+      [`${targetCycleId}-${targetStepId}-${targetJoint}`]: 'Captured'
     }));
 
     setJointReadings((prev) => ({
       ...prev,
-      [selectedJoint]: avg
+      [targetJoint]: avg
     }));
   }, [selectedJoint, activeCycleId, activeStepId, activeModel, activeStep, activeCycle, getReferenceParams]);
 
@@ -870,6 +917,9 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   useEffect(() => {
     const unsubCapEvents = esp32Service.subscribeCaptureEvents((evt) => {
       if (evt.type === 'CAPTURE_STARTED') {
+        captureJointRef.current = selectedJoint;
+        captureStepIdRef.current = activeStepId;
+        captureCycleIdRef.current = activeCycleId;
         setIsCapturing(true);
         setCaptureCountdown(5);
         setHasCaptured(false);
@@ -882,6 +932,10 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           setIsCapturing(false);
           return;
         }
+
+        const targetJoint = captureJointRef.current || selectedJoint;
+        const targetStepId = captureStepIdRef.current || activeStepId;
+        const targetCycleId = captureCycleIdRef.current || activeCycleId;
 
         // Dual Calculation Verification Step (PC vs ESP32)
         if (result.raw_samples && result.raw_samples.length === 100) {
@@ -915,19 +969,23 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           readingTime: `${result.reading_time.toFixed(2)} s`
         };
 
-        setCapturedParams(newParams);
+        setJointParamsMap(prev => ({ ...prev, [targetJoint]: newParams }));
+        if (selectedJoint === targetJoint) {
+          setCapturedParams(newParams);
+        }
+
         setIsCapturing(false);
         setHasCaptured(true);
         samplesReceivedRef.current = true;
 
         setJointStatuses((prev) => ({
           ...prev,
-          [`${activeCycleId}-${activeStepId}-${selectedJoint}`]: 'Captured'
+          [`${targetCycleId}-${targetStepId}-${targetJoint}`]: 'Captured'
         }));
 
         setJointReadings((prev) => ({
           ...prev,
-          [selectedJoint]: result.average_power
+          [targetJoint]: result.average_power
         }));
       } else if (evt.type === 'SAMPLES') {
         const { capture_id, samples, reading_time } = evt.payload;
@@ -954,6 +1012,11 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
   const handleCaptureReading = async () => {
     if (isCapturing) return;
+
+    // Pin capture context
+    captureJointRef.current = selectedJoint;
+    captureStepIdRef.current = activeStepId;
+    captureCycleIdRef.current = activeCycleId;
 
     // MANDATORY HARDWARE CHECK: No capture without real connected & verified ESP32
     const currentEspStatus = esp32Service.getStatus();
@@ -1023,11 +1086,11 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
     // Move to next joint in cycle: Before -> Upper -> After -> Next Step
     if (selectedJoint === 'Before') {
-      setSelectedJoint('Upper');
+      handleSelectJoint('Upper');
     } else if (selectedJoint === 'Upper') {
-      setSelectedJoint('After');
+      handleSelectJoint('After');
     } else if (selectedJoint === 'After') {
-      setSelectedJoint('Before');
+      handleSelectJoint('Before');
       // Move to next step
       const currentStepIndex = activeCycle.steps.findIndex((s) => s.id === activeStepId);
       if (currentStepIndex !== -1 && currentStepIndex < activeCycle.steps.length - 1) {
@@ -1060,11 +1123,11 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     }
 
     if (selectedJoint === 'Before') {
-      setSelectedJoint('Upper');
+      handleSelectJoint('Upper');
     } else if (selectedJoint === 'Upper') {
-      setSelectedJoint('After');
+      handleSelectJoint('After');
     } else if (selectedJoint === 'After') {
-      setSelectedJoint('Before');
+      handleSelectJoint('Before');
       const currentStepIndex = activeCycle.steps.findIndex((s) => s.id === activeStepId);
       if (currentStepIndex !== -1 && currentStepIndex < activeCycle.steps.length - 1) {
         setActiveStepId(activeCycle.steps[currentStepIndex + 1].id);
@@ -1524,7 +1587,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                   return (
                     <div
                       key={jKey}
-                      onClick={() => setSelectedJoint(jKey)}
+                      onClick={() => handleSelectJoint(jKey)}
                       className={`flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded transition-colors ${
                         isActive ? 'bg-slate-900 border border-amber-400/50 text-amber-300 font-bold' : 'text-slate-400 hover:text-slate-200'
                       }`}

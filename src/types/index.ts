@@ -229,6 +229,7 @@ export interface PendingTestSession {
   selectedJoint: JointType;
   activeFault: string;
   jointStatuses: Record<string, 'Pending' | 'Captured' | 'Saved' | 'Skipped' | 'Error'>;
+  jointReadings?: { Before: number; Upper: number; After: number };
   capturedParams: {
     intensity: string;
     frequency: string;
