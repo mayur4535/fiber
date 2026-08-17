@@ -50,6 +50,7 @@ import { compareReadings, diagnoseFaults, evaluateOpticalStepDiagnosis, parseSte
 import { localDB } from '../../services/db';
 import { ConfirmModal, PromptModal } from '../common/ModalDialogs';
 import { OscilloscopeModal } from '../common/OscilloscopeModal';
+import { LiveOscilloscope } from './LiveOscilloscope';
 
 interface LiveTestModuleProps {
   activeModel: FiberModel;
@@ -1566,9 +1567,12 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         </div>
 
         {/* RIGHT COLUMN: MAIN TEST PANEL (8 Cols on desktop) */}
-        <div className="lg:col-span-8 bg-[#0B132B] border border-slate-800 rounded-lg p-2 flex flex-col justify-between shadow-xl overflow-hidden h-full space-y-1.5 min-h-0">
-          <div className="space-y-1.5 flex-1 flex flex-col min-h-0">
+        <div className="lg:col-span-8 bg-[#0B132B] border border-slate-800 rounded-lg p-2 flex flex-col justify-between shadow-xl overflow-y-auto h-full space-y-2 min-h-0">
+          <div className="space-y-2 flex-1 flex flex-col min-h-0">
             
+            {/* LIVE OSCILLOSCOPE REAL-TIME INTENSITY MONITOR */}
+            <LiveOscilloscope espStatus={espStatus} />
+
             {/* COMPACT HORIZONTAL JOINT HEADER BANNER */}
             <div className="bg-[#0d1836] border border-slate-800 px-2.5 py-1 rounded-lg shadow-inner flex flex-wrap items-center justify-between gap-2 shrink-0">
               {/* Joint Name & Rename */}

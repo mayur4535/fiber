@@ -176,8 +176,22 @@ export interface CalibrationData {
   verified: boolean;
 }
 
+export type TransportConnectionState = 'DISCONNECTED' | 'CONNECTING' | 'VERIFIED CONNECTED' | 'CONNECTION FAILED';
+
+export interface ESP32TransportStatus {
+  state: TransportConnectionState;
+  portOrIp: string;
+  deviceName?: string;
+  firmwareVersion?: string;
+  serialNumber?: string;
+  lastError?: string;
+}
+
 export interface ESP32Status {
   connected: boolean;
+  usbStatus: ESP32TransportStatus;
+  wifiStatus: ESP32TransportStatus;
+  activeTransport: 'USB' | 'WIFI' | 'BOTH' | 'NONE';
   connectionType: 'USB Serial' | 'Bluetooth' | 'WiFi' | 'Wi-Fi WebSocket' | 'Wi-Fi HTTP Stream' | 'Simulated' | 'Disconnected';
   deviceName: string;
   firmwareVersion: string;

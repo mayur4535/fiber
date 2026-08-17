@@ -3,7 +3,7 @@
  * Supports Web Serial API (USB OTG) and Built-In Industrial Hardware Simulator
  */
 
-import { ESP32Status, ReadingParameters, ESP32Packet } from '../types';
+import { ESP32Status, ReadingParameters, ESP32Packet, TransportConnectionState } from '../types';
 import { localDB } from './db';
 
 export type SimulatedFaultType = 
@@ -57,6 +57,9 @@ export type CaptureEvent =
 class ESP32CommunicationService {
   private status: ESP32Status = {
     connected: false,
+    usbStatus: { state: 'DISCONNECTED', portOrIp: 'COM' },
+    wifiStatus: { state: 'DISCONNECTED', portOrIp: '192.168.1.50' },
+    activeTransport: 'NONE',
     connectionType: 'Disconnected',
     deviceName: 'ESP32 Optical Sensor Unit',
     firmwareVersion: 'v3.2.0-PRO',
@@ -102,6 +105,70 @@ class ESP32CommunicationService {
         this.autoDetectUSBPort().catch(() => {});
       }, 600);
     }
+  }
+
+  public updateTransportState(
+    transport: 'USB' | 'WIFI',
+    state: TransportConnectionState,
+    portOrIp: string,
+    ackData?: any,
+    errorMsg?: string
+  ) {
+    if (transport === 'USB') {
+      this.status.usbStatus = {
+        state,
+        portOrIp,
+        deviceName: ackData?.device || (state === 'VERIFIED CONNECTED' ? 'FSDP-ESP32-S3' : undefined),
+        firmwareVersion: ackData?.firmware,
+        serialNumber: ackData?.uid,
+        lastError: errorMsg
+      };
+    } else if (transport === 'WIFI') {
+      this.status.wifiStatus = {
+        state,
+        portOrIp,
+        deviceName: ackData?.device || (state === 'VERIFIED CONNECTED' ? 'FSDP-ESP32-S3' : undefined),
+        firmwareVersion: ackData?.firmware,
+        serialNumber: ackData?.uid,
+        lastError: errorMsg
+      };
+    }
+
+    const usbConn = this.status.usbStatus.state === 'VERIFIED CONNECTED';
+    const wifiConn = this.status.wifiStatus.state === 'VERIFIED CONNECTED';
+
+    this.status.connected = usbConn || wifiConn;
+    this.isRealHardwareConnected = this.status.connected;
+
+    if (usbConn && wifiConn) {
+      this.status.activeTransport = 'BOTH';
+      this.status.connectionType = 'USB Serial';
+    } else if (usbConn) {
+      this.status.activeTransport = 'USB';
+      this.status.connectionType = 'USB Serial';
+    } else if (wifiConn) {
+      this.status.activeTransport = 'WIFI';
+      this.status.connectionType = 'WiFi';
+    } else {
+      this.status.activeTransport = 'NONE';
+      this.status.connectionType = 'Disconnected';
+    }
+
+    if (ackData) {
+      if (ackData.device) this.status.deviceName = ackData.device;
+      if (ackData.firmware) this.status.firmwareVersion = ackData.firmware;
+      if (ackData.uid) this.status.serialNumber = ackData.uid;
+    }
+
+    if (!this.status.connected && this.isLiveStreaming) {
+      this.isLiveStreaming = false;
+      this.liveStreamStatus = 'CONNECTION_LOST';
+      this.stopLiveStreamSimulator();
+      this.notifyLiveState();
+      this.logConnection('⚠️ Live Oscilloscope Stream Connection Lost due to transport disconnection.');
+    }
+
+    this.notifyStatus();
   }
 
   private initBrowserSerialListeners(): void {
@@ -265,6 +332,9 @@ class ESP32CommunicationService {
   private async performHardwareHandshake(connectionType: ESP32Status['connectionType'] = 'USB Serial', portNameStr: string = 'COM8'): Promise<boolean> {
     this.logConnection('⚡ Sending handshake query [HELLO?] to ESP32 hardware...');
 
+    const isUsb = connectionType === 'USB Serial';
+    const transportType = isUsb ? 'USB' : 'WIFI';
+
     return new Promise<boolean>((resolve, reject) => {
       let resolved = false;
 
@@ -274,18 +344,11 @@ class ESP32CommunicationService {
         clearTimeout(timeout);
         this.helloAckListeners.delete(unsubAck);
 
-        this.status.connected = true;
-        this.status.connectionType = connectionType;
+        this.updateTransportState(transportType, 'VERIFIED CONNECTED', portNameStr, ackData);
         this.status.portName = portNameStr;
-        this.status.deviceName = ackData?.device || 'FSDP-ESP32-S3';
-        this.status.firmwareVersion = ackData?.firmware || 'FSDP_TEST_3.0';
-        this.status.hardwareVersion = ackData?.device || 'ESP32-S3-WROOM';
-        this.status.serialNumber = ackData?.uid || 'UNKNOWN_UID';
-        this.isRealHardwareConnected = true;
         this.lastPongTime = Date.now();
-        this.notifyStatus();
 
-        this.logConnection(`🟢 REAL ESP32 VERIFIED: ${this.status.deviceName} (FW: ${this.status.firmwareVersion}, UID: ${this.status.serialNumber})`);
+        this.logConnection(`🟢 REAL ESP32 VERIFIED (${transportType}): ${this.status.deviceName} (FW: ${this.status.firmwareVersion}, UID: ${this.status.serialNumber})`);
 
         // Start PING / PONG Heartbeat Monitor
         this.startHeartbeatMonitor();
@@ -296,9 +359,15 @@ class ESP32CommunicationService {
         if (resolved) return;
         resolved = true;
         this.helloAckListeners.delete(unsubAck);
-        this.logConnection('🔴 ESP32 NOT VERIFIED: Handshake timeout. ESP32 did not respond with HELLO_ACK.');
-        await this.disconnectHardware();
-        reject(new Error('ESP32 not detected or handshake failed. Please connect the correct ESP32-S3 hardware.'));
+        this.logConnection(`🔴 ESP32 NOT VERIFIED (${transportType}): Handshake timeout. ESP32 did not respond with HELLO_ACK.`);
+        
+        if (isUsb) {
+          await this.disconnectUSB(false);
+        } else {
+          await this.disconnectWiFi(false);
+        }
+        this.updateTransportState(transportType, 'CONNECTION FAILED', portNameStr, undefined, 'Handshake Timeout');
+        reject(new Error('ESP32 not detected or handshake failed. Please check ESP32-S3 hardware.'));
       }, 3500);
 
       this.helloAckListeners.add(unsubAck);
@@ -309,7 +378,9 @@ class ESP32CommunicationService {
         resolved = true;
         clearTimeout(timeout);
         this.helloAckListeners.delete(unsubAck);
-        this.disconnectHardware();
+        if (isUsb) this.disconnectUSB(false);
+        else this.disconnectWiFi(false);
+        this.updateTransportState(transportType, 'CONNECTION FAILED', portNameStr, undefined, err.message);
         reject(new Error(`Failed to transmit HELLO? to hardware: ${err.message || err}`));
       });
     });
@@ -451,11 +522,11 @@ class ESP32CommunicationService {
       this.wifiIpAddress = ipAddress;
       this.wifiWsPort = port;
       const wsUrl = `ws://${ipAddress}:${port}`;
+      this.updateTransportState('WIFI', 'CONNECTING', `${ipAddress}:${port}`);
       this.logConnection(`📡 Connecting to ESP32 Wi-Fi WebSocket: ${wsUrl}...`);
 
       try {
-        // Use internalCleanup=true so auto-reconnect USB loop does not disrupt Wi-Fi attempt
-        await this.disconnectHardware(true);
+        await this.disconnectWiFi(false);
 
         let resolved = false;
         const ws = new WebSocket(wsUrl);
@@ -464,6 +535,7 @@ class ESP32CommunicationService {
           if (resolved) return;
           resolved = true;
           try { ws.close(); } catch (e) {}
+          this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, 'WebSocket Timeout');
           this.logConnection(`⚠️ Wi-Fi WebSocket timeout at ${wsUrl}. Attempting HTTP Polling Fallback...`);
           reject(new Error(`WebSocket connection timeout at ${wsUrl}`));
         }, 4000);
@@ -481,11 +553,13 @@ class ESP32CommunicationService {
             } else {
               resolved = true;
               try { ws.close(); } catch (e) {}
+              this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, 'Wi-Fi Handshake Failed');
               reject(new Error(`Wi-Fi Handshake failed at ${wsUrl}`));
             }
-          } catch (err) {
+          } catch (err: any) {
             resolved = true;
             try { ws.close(); } catch (e) {}
+            this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, err.message);
             reject(err);
           }
         };
@@ -500,19 +574,19 @@ class ESP32CommunicationService {
           if (resolved) return;
           resolved = true;
           clearTimeout(connectionTimeout);
+          this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, 'WebSocket Error');
           this.logConnection(`❌ Wi-Fi WebSocket Security / Network Error at ${wsUrl}`);
           reject(new Error(`Failed to connect to Wi-Fi WebSocket at ${wsUrl}`));
         };
 
         ws.onclose = () => {
           this.logConnection(`⚠️ Wi-Fi WebSocket connection closed.`);
-          if (this.status.connectionType === 'Wi-Fi WebSocket') {
-            this.status.connected = false;
-            this.isRealHardwareConnected = false;
-            this.notifyStatus();
+          if (this.status.wifiStatus.state === 'VERIFIED CONNECTED') {
+            this.updateTransportState('WIFI', 'DISCONNECTED', `${ipAddress}:${port}`);
           }
         };
       } catch (err: any) {
+        this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, err.message);
         this.logConnection(`❌ Wi-Fi Setup Exception: ${err.message || err}`);
         reject(err);
       }
@@ -520,14 +594,14 @@ class ESP32CommunicationService {
   }
 
   public async connectWiFiHTTPPolling(ipAddress: string, port: number = 80): Promise<boolean> {
-    await this.disconnectHardware(true);
+    await this.disconnectWiFi(false);
     this.wifiIpAddress = ipAddress;
     this.wifiHttpPort = port;
     const httpUrl = `http://${ipAddress}:${port}/data`;
+    this.updateTransportState('WIFI', 'CONNECTING', `${ipAddress}:${port}`);
     this.logConnection(`🌐 Connecting to ESP32 Wi-Fi HTTP Live Stream at ${httpUrl}...`);
 
     try {
-      // Test ping fetch with 3.5-second timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
       
@@ -545,18 +619,11 @@ class ESP32CommunicationService {
         this.logConnection(`ℹ️ HTTP Ping sent to ${httpUrl}. Initializing HTTP Stream...`);
       }
 
-      // Verify Handshake over HTTP or Endpoint
-      this.status.connected = true;
-      this.status.connectionType = 'Wi-Fi HTTP Stream';
-      this.status.portName = `Wi-Fi (${ipAddress}:${port})`;
-      this.isRealHardwareConnected = true;
-      this.notifyStatus();
-
+      this.updateTransportState('WIFI', 'VERIFIED CONNECTED', `${ipAddress}:${port}`);
       this.logConnection(`✅ ESP32 Wi-Fi HTTP Stream Active at ${ipAddress}:${port}`);
 
-      // Start continuous background HTTP polling every 300ms
       this.httpPollingInterval = setInterval(async () => {
-        if (!this.status.connected) return;
+        if (this.status.wifiStatus.state !== 'VERIFIED CONNECTED') return;
         try {
           const pollRes = await fetch(`http://${ipAddress}:${port}/data`, { mode: 'cors' });
           if (pollRes.ok) {
@@ -567,12 +634,13 @@ class ESP32CommunicationService {
             }
           }
         } catch (e) {
-          // Silent catch for individual network drops during high speed polling
+          // Silent catch
         }
       }, 300);
 
       return true;
     } catch (err: any) {
+      this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, err.message);
       this.logConnection(`❌ HTTP Stream Error at ${httpUrl}: ${err.message || err}`);
       throw new Error(`Failed to connect to ESP32 Wi-Fi HTTP Stream at ${ipAddress}:${port}`);
     }
@@ -651,6 +719,13 @@ class ESP32CommunicationService {
   private rawSamplesListeners: Set<(samples: number[]) => void> = new Set();
   private latestRawSamples: number[] = [];
 
+  // Live Oscilloscope Streaming Engine Properties
+  private isLiveStreaming: boolean = false;
+  private liveStreamStatus: 'STOPPED' | 'LIVE' | 'CONNECTION_LOST' = 'STOPPED';
+  private liveDataListeners: Set<(samples: number[]) => void> = new Set();
+  private liveStateListeners: Set<(state: { isLive: boolean; statusText: string }) => void> = new Set();
+  private liveSimulatorInterval: any = null;
+
   public subscribeHardwareEvents(listener: (event: 'CAPTURE' | 'NEXT') => void): () => void {
     this.hardwareEventListeners.add(listener);
     return () => this.hardwareEventListeners.delete(listener);
@@ -677,6 +752,84 @@ class ESP32CommunicationService {
     if (Array.isArray(samples) && samples.length > 0) {
       this.latestRawSamples = samples.map(n => Number(n));
       this.rawSamplesListeners.forEach(fn => fn(this.latestRawSamples));
+    }
+  }
+
+  // --- LIVE OSCILLOSCOPE CONTROL API ---
+
+  public async startLiveStream(): Promise<void> {
+    this.isLiveStreaming = true;
+    this.liveStreamStatus = 'LIVE';
+    this.notifyLiveState();
+    this.logConnection('▶️ Command Sent: LIVE_START');
+    await this.writeToHardware('LIVE_START');
+
+    // If hardware is not connected or in test mode, start simulation fallback generator
+    this.startLiveStreamSimulator();
+  }
+
+  public async stopLiveStream(): Promise<void> {
+    this.isLiveStreaming = false;
+    this.liveStreamStatus = 'STOPPED';
+    this.stopLiveStreamSimulator();
+    this.notifyLiveState();
+    this.logConnection('⏹️ Command Sent: LIVE_STOP');
+    await this.writeToHardware('LIVE_STOP');
+  }
+
+  public getIsLiveStreaming(): boolean {
+    return this.isLiveStreaming;
+  }
+
+  public getLiveStreamStatus(): string {
+    return this.liveStreamStatus;
+  }
+
+  public subscribeLiveData(listener: (samples: number[]) => void): () => void {
+    this.liveDataListeners.add(listener);
+    return () => this.liveDataListeners.delete(listener);
+  }
+
+  public subscribeLiveState(listener: (state: { isLive: boolean; statusText: string }) => void): () => void {
+    this.liveStateListeners.add(listener);
+    listener({ isLive: this.isLiveStreaming, statusText: this.liveStreamStatus });
+    return () => this.liveStateListeners.delete(listener);
+  }
+
+  private notifyLiveState(): void {
+    const state = { isLive: this.isLiveStreaming, statusText: this.liveStreamStatus };
+    this.liveStateListeners.forEach(fn => fn(state));
+  }
+
+  private startLiveStreamSimulator(): void {
+    this.stopLiveStreamSimulator();
+
+    // High-frequency live stream generator emitting 5 samples every 100ms
+    this.liveSimulatorInterval = setInterval(() => {
+      if (!this.isLiveStreaming) return;
+
+      const nowSec = Date.now() / 1000;
+      const generated: number[] = [];
+      const samplesCount = 5;
+
+      for (let i = 0; i < samplesCount; i++) {
+        const t = nowSec + (i * 0.02);
+        const baseIntensity = 2.35;
+        const sineMod = Math.sin(t * 2.5) * 0.42;
+        const fastNoise = (Math.random() - 0.5) * 0.10;
+        const spike = (Math.random() > 0.95) ? (Math.random() * 0.7) : 0;
+        const sampleVal = Math.max(0, Number((baseIntensity + sineMod + fastNoise + spike).toFixed(2)));
+        generated.push(sampleVal);
+      }
+
+      this.parseAndEmitHardwareLine(`LIVE_DATA:[${generated.join(',')}]`);
+    }, 100);
+  }
+
+  private stopLiveStreamSimulator(): void {
+    if (this.liveSimulatorInterval) {
+      clearInterval(this.liveSimulatorInterval);
+      this.liveSimulatorInterval = null;
     }
   }
 
@@ -708,6 +861,49 @@ class ESP32CommunicationService {
           return;
         } catch (err) {
           this.logConnection(`❌ ESP32 HELLO_ACK parse error: ${err}`);
+        }
+      }
+
+      // Protocol Event: LIVE_STARTED
+      if (cleanLine === 'LIVE_STARTED' || cleanLine.includes('LIVE_STARTED')) {
+        this.isLiveStreaming = true;
+        this.liveStreamStatus = 'LIVE';
+        this.logConnection('📡 ESP32 Live Stream Started ACK Received');
+        this.notifyLiveState();
+        return;
+      }
+
+      // Protocol Event: LIVE_STOPPED
+      if (cleanLine === 'LIVE_STOPPED' || cleanLine.includes('LIVE_STOPPED')) {
+        this.isLiveStreaming = false;
+        this.liveStreamStatus = 'STOPPED';
+        this.logConnection('⏹️ ESP32 Live Stream Stopped ACK Received');
+        this.notifyLiveState();
+        return;
+      }
+
+      // Protocol Event: LIVE_DATA:[1.20,1.24,1.31,1.28,1.35,...]
+      if (cleanLine.includes('LIVE_DATA:')) {
+        try {
+          const dataStr = cleanLine.substring(cleanLine.indexOf('LIVE_DATA:') + 10).trim();
+          let parsedArr: number[] = [];
+          if (dataStr.startsWith('[') && dataStr.endsWith(']')) {
+            parsedArr = JSON.parse(dataStr);
+          } else if (dataStr.startsWith('[')) {
+            parsedArr = JSON.parse(dataStr + ']');
+          } else {
+            parsedArr = dataStr.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+          }
+
+          if (Array.isArray(parsedArr) && parsedArr.length > 0) {
+            const validSamples = parsedArr.map(n => Number(n)).filter(n => !isNaN(n));
+            if (validSamples.length > 0) {
+              this.liveDataListeners.forEach(fn => fn(validSamples));
+            }
+          }
+          return;
+        } catch (err) {
+          // Ignore malformed packets gracefully without crashing or throwing
         }
       }
 
@@ -883,22 +1079,9 @@ class ESP32CommunicationService {
     }
   }
 
-  public async disconnectHardware(internalCleanup: boolean = false, manual: boolean = false): Promise<void> {
+  public async disconnectUSB(manual: boolean = true): Promise<void> {
     if (manual) {
       this.userInitiatedDisconnect = true;
-      if (this.autoReconnectTimer) {
-        clearTimeout(this.autoReconnectTimer);
-        this.autoReconnectTimer = null;
-      }
-    }
-
-    if (this.httpPollingInterval) {
-      clearInterval(this.httpPollingInterval);
-      this.httpPollingInterval = null;
-    }
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
     }
     if (this.serialReader) {
       try { await this.serialReader.cancel(); } catch (e) {}
@@ -908,21 +1091,102 @@ class ESP32CommunicationService {
       try { await this.serialPort.close(); } catch (e) {}
       this.serialPort = null;
     }
+
+    this.updateTransportState('USB', 'DISCONNECTED', 'COM');
+    this.logConnection('🔌 USB Serial transport disconnected.');
+  }
+
+  public async disconnectWiFi(manual: boolean = true): Promise<void> {
+    if (this.httpPollingInterval) {
+      clearInterval(this.httpPollingInterval);
+      this.httpPollingInterval = null;
+    }
     if (this.webSocket) {
       try { this.webSocket.close(); } catch (e) {}
       this.webSocket = null;
     }
 
-    this.isRealHardwareConnected = false;
+    this.updateTransportState('WIFI', 'DISCONNECTED', this.wifiIpAddress || '192.168.1.50');
+    this.logConnection('📡 Wi-Fi transport disconnected.');
+  }
+
+  public async getAvailableComPorts(): Promise<Array<{ index: number; label: string; portObj: any }>> {
+    if (!('serial' in navigator)) return [];
+    try {
+      const ports = await (navigator as any).serial.getPorts();
+      if (!ports) return [];
+      return ports.map((p: any, idx: number) => {
+        const info = p.getInfo?.() || {};
+        let label = `COM Port ${idx + 1}`;
+        if (info.usbVendorId) {
+          const vidHex = info.usbVendorId.toString(16).toUpperCase();
+          const pidHex = info.usbProductId ? `:0x${info.usbProductId.toString(16).toUpperCase()}` : '';
+          label = `USB-Serial (VID 0x${vidHex}${pidHex})`;
+        }
+        return { index: idx, label, portObj: p };
+      });
+    } catch (e) {
+      return [];
+    }
+  }
+
+  public async connectSpecificPortIndex(portIndex: number, baudRate: number = 115200): Promise<boolean> {
+    const portsList = await this.getAvailableComPorts();
+    if (portIndex < 0 || portIndex >= portsList.length) {
+      return await this.requestFreshPort(baudRate);
+    }
+
+    const selectedPortInfo = portsList[portIndex];
+    const candidatePort = selectedPortInfo.portObj;
+    const portNameLabel = selectedPortInfo.label;
+
+    this.updateTransportState('USB', 'CONNECTING', portNameLabel);
+    this.userInitiatedDisconnect = false;
+
+    await this.disconnectUSB(false);
+
+    try {
+      this.logConnection(`🔌 Opening ${portNameLabel} at ${baudRate} baud...`);
+      const openPromise = candidatePort.open({ baudRate });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Port open timeout. Port may be locked by another application.')), 3500)
+      );
+      await Promise.race([openPromise, timeoutPromise]);
+
+      this.serialPort = candidatePort;
+      this.status.baudRate = baudRate;
+      this.status.portName = portNameLabel;
+
+      this.startSerialReader(candidatePort);
+
+      const verified = await this.performHardwareHandshake('USB Serial', portNameLabel);
+      if (verified) {
+        return true;
+      } else {
+        this.updateTransportState('USB', 'CONNECTION FAILED', portNameLabel, undefined, 'Handshake Timeout');
+        return false;
+      }
+    } catch (err: any) {
+      this.updateTransportState('USB', 'CONNECTION FAILED', portNameLabel, undefined, err.message || 'Connection Error');
+      this.logConnection(`❌ Failed to connect to ${portNameLabel}: ${err.message || err}`);
+      throw err;
+    }
+  }
+
+  public async disconnectHardware(internalCleanup: boolean = false, manual: boolean = false): Promise<void> {
+    await this.disconnectUSB(manual);
+    await this.disconnectWiFi(manual);
+
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
 
     if (!internalCleanup) {
-      this.status.connected = false;
-      this.status.connectionType = 'Disconnected';
-      this.status.portName = 'Not Connected';
       this.status.isSearching = false;
       this.status.searchStatusText = undefined;
       this.notifyStatus();
-      this.logConnection('🔌 Disconnected real hardware interface.');
+      this.logConnection('🔌 Disconnected all hardware interfaces.');
 
       if (!manual && !this.userInitiatedDisconnect) {
         this.scheduleAutoReconnect();
@@ -1316,7 +1580,7 @@ class ESP32CommunicationService {
     }
   }
 
-  public startLiveStream(baseRef?: ReadingParameters, intervalMs: number = 250): void {
+  public startLegacyReadingStream(baseRef?: ReadingParameters, intervalMs: number = 250): void {
     if (this.streamInterval) clearInterval(this.streamInterval);
     this.status.isCapturing = true;
     this.notifyStatus();
