@@ -49,6 +49,7 @@ import { esp32Service, SimulatedFaultType } from '../../services/esp32Service';
 import { compareReadings, diagnoseFaults, evaluateOpticalStepDiagnosis, parseStepModules, STANDARD_SOURCE_COMPONENTS } from '../../services/rulesEngine';
 import { localDB } from '../../services/db';
 import { ConfirmModal, PromptModal } from '../common/ModalDialogs';
+import { OscilloscopeModal } from '../common/OscilloscopeModal';
 
 interface LiveTestModuleProps {
   activeModel: FiberModel;
@@ -206,6 +207,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   });
   const [showEditRefModal, setShowEditRefModal] = useState<boolean>(false);
   const [showEditLiveModal, setShowEditLiveModal] = useState<boolean>(false);
+  const [showOscilloscopeModal, setShowOscilloscopeModal] = useState<boolean>(false);
 
   // Real Hardware Connection States (USB COM Port & Wi-Fi)
   const [internalShowHardwareModal, setInternalShowHardwareModal] = useState<boolean>(false);
@@ -232,7 +234,16 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   }, []);
 
   useEffect(() => {
-    const unsubStatus = esp32Service.subscribeStatus(setEspStatus);
+    const unsubStatus = esp32Service.subscribeStatus((status) => {
+      setEspStatus(status);
+      if (status.portName && status.portName.includes('Wi-Fi')) {
+        const match = status.portName.match(/Wi-Fi\s*\(([^:]+):(\d+)\)/);
+        if (match) {
+          if (match[1]) setWifiIp(match[1]);
+          if (match[2]) setWifiPort(Number(match[2]));
+        }
+      }
+    });
     const unsubLogs = esp32Service.subscribeLogs((log) => {
       setHardwareLogs((prev) => [log, ...prev.slice(0, 49)]);
     });
@@ -933,7 +944,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         const source = captureSourceRef.current;
         const timeStr = new Date().toISOString();
 
-        console.log(`[MEASUREMENT_RESULT] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} target_joint=${targetJoint} average_power=${result.average_power} intensity=${result.intensity} optical_loss=${result.optical_loss} stability=${result.stability} min_power=${result.min_power} max_power=${result.max_power} tolerance=${result.tolerance} reading_time=${result.reading_time}`);
+        console.log(`[PC_MEASUREMENT_RESULT_RECEIVED]\ncapture_id=${result.capture_id || 'N/A'}\nsource=${source}\ntime=${timeStr}\ntarget_joint=${targetJoint}\naverage_power=${result.average_power}\nintensity=${result.intensity}\noptical_loss=${result.optical_loss}\nstability=${result.stability}\nmin_power=${result.min_power}\nmax_power=${result.max_power}`);
 
         // Validate 100 sample count and device metadata
         if (result.sample_count !== 100) {
@@ -985,7 +996,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
           readingTime: `${result.reading_time.toFixed(2)} s`
         };
 
-        console.log(`[UI_UPDATE] capture_id=${result.capture_id || 'N/A'} source=${source} time=${timeStr} target_joint=${targetJoint} average_power=${result.average_power}`);
+        console.log(`[PC_UI_UPDATE]\ncapture_id=${result.capture_id || 'N/A'}\ntarget_joint=${targetJoint}\naverage_power=${result.average_power}\nsource=${source}`);
 
         setJointParamsMap(prev => ({ ...prev, [targetJoint]: newParams }));
         if (selectedJoint === targetJoint) {
@@ -1060,7 +1071,8 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     const capId = `TEST00${captureSequenceIndex + 1}`;
     setCaptureSequenceIndex((idx) => idx + 1);
 
-    console.log(`[CAPTURE_EVENT] source=${source} capture_id=${capId} time=${new Date().toISOString()} target_joint=${selectedJoint}`);
+    console.log(`[WIFI_CAPTURE_START]\ncapture_id=${capId}\nip=${wifiIp}\nport=${wifiPort}\nsource=${source}\ntarget_joint=${selectedJoint}`);
+    esp32Service.logConnection(`[WIFI_CAPTURE_START] capture_id=${capId} ip=${wifiIp} port=${wifiPort} source=${source} target_joint=${selectedJoint}`);
 
     // Retrieve current saved reference power for the selected joint
     const savedRef = getReferenceParams();
@@ -1808,13 +1820,24 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
                 </div>
               </div>
 
-              <button
-                onClick={() => setShowDiagnosisModal(true)}
-                className="px-4 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-[11px] rounded-lg shadow-md border border-cyan-400/30 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
-              >
-                <Stethoscope className="w-4 h-4 text-cyan-200" />
-                <span>OPEN DIAGNOSIS ENGINE</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowOscilloscopeModal(true)}
+                  className="px-3.5 py-1.5 bg-indigo-900/90 hover:bg-indigo-800 text-indigo-200 font-bold text-[11px] rounded-lg shadow-md border border-indigo-500/50 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer font-mono"
+                  title="Open Real-Time Optical Waveform Oscilloscope"
+                >
+                  <Activity className="w-4 h-4 text-indigo-400" />
+                  <span>📈 OSCILLOSCOPE</span>
+                </button>
+
+                <button
+                  onClick={() => setShowDiagnosisModal(true)}
+                  className="px-4 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-[11px] rounded-lg shadow-md border border-cyan-400/30 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Stethoscope className="w-4 h-4 text-cyan-200" />
+                  <span>OPEN DIAGNOSIS ENGINE</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2422,12 +2445,15 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
               <div className="space-y-3 text-xs font-mono shrink-0">
                 <div className="bg-slate-950 border border-slate-800 p-3 rounded-xl space-y-2">
                   <div className="flex justify-between items-center text-amber-300 font-bold text-[11px]">
-                    <span>Arduino IDE ESP32 Complete Wi-Fi & USB Firmware Code</span>
+                    <span>Arduino IDE ESP32 Complete Wi-Fi (HTTP Stream + WS) & USB Firmware Code</span>
                     <button
                       onClick={() => {
-                        const code = `#include <WiFi.h>
+                        const code = `// ESP32-S3 Remix Fiber Diagnostic Pro - Full Production Firmware v3.2
+// Supports USB CDC Serial (115200), Wi-Fi WebServer (Port 80), WebSocket (Port 81), GPIO5 Switch
+#include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
+#include <ArduinoJson.h>
 
 const char* ssid = "YOUR_WIFI_NAME";
 const char* password = "YOUR_WIFI_PASSWORD";
@@ -2435,40 +2461,160 @@ const char* password = "YOUR_WIFI_PASSWORD";
 WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 
-void handleData() {
-  float intensityVal = analogRead(34) * (30.0 / 4095.0);
-  String json = "{\\"intensity\\":" + String(intensityVal, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0,\\"temperature\\":31.5}";
+#define PIN_ADC 34
+#define PIN_GPIO5_CAPTURE 5
+#define PIN_GPIO6_NEXT 6
+
+String lastResultJson = "";
+bool isCapturing = false;
+
+void broadcastMessage(String msg) {
+  Serial.println(msg);
+  webSocket.broadcastTXT(msg);
+  lastResultJson = msg;
+}
+
+void perform100SampleCapture(String capId, float refPower) {
+  isCapturing = true;
+  broadcastMessage("CAPTURE_STARTED:" + capId);
+
+  float samples[100];
+  float sum = 0.0;
+  float minVal = 99999.0;
+  float maxVal = -99999.0;
+
+  for (int i = 0; i < 100; i++) {
+    float rawPower = (analogRead(PIN_ADC) / 4095.0) * 30.0; // 0-30W Range
+    samples[i] = rawPower;
+    sum += rawPower;
+    if (rawPower < minVal) minVal = rawPower;
+    if (rawPower > maxVal) maxVal = rawPower;
+    delay(50); // 100 samples over 5.0 seconds
+  }
+
+  float avgPower = sum / 100.0;
+  float intensity = (refPower > 0) ? (avgPower / refPower) * 100.0 : 98.5;
+  float loss = (refPower > 0) ? max(0.0f, (1.0f - (avgPower / refPower)) * 100.0f) : 1.20;
+
+  // Calculate Variance & Stability %
+  float varianceSum = 0.0;
+  for (int i = 0; i < 100; i++) {
+    varianceSum += pow(samples[i] - avgPower, 2);
+  }
+  float stdDev = sqrt(varianceSum / 100.0);
+  float stability = max(0.0f, min(100.0f, 100.0f - ((stdDev / (avgPower > 0 ? avgPower : 1.0f)) * 100.0f)));
+
+  StaticJsonDocument<1024> doc;
+  doc["capture_id"] = capId;
+  doc["sample_count"] = 100;
+  doc["average_power"] = round(avgPower * 100.0) / 100.0;
+  doc["intensity"] = round(intensity * 100.0) / 100.0;
+  doc["optical_loss"] = round(loss * 100.0) / 100.0;
+  doc["stability"] = round(stability * 100.0) / 100.0;
+  doc["min_power"] = round(minVal * 100.0) / 100.0;
+  doc["max_power"] = round(maxVal * 100.0) / 100.0;
+  doc["tolerance"] = 2.0;
+  doc["reading_time"] = 5.0;
+  doc["reference_power"] = refPower;
+  doc["firmware"] = "v3.2.0-PRODUCTION";
+  doc["uid"] = "ESP32-S3-" + WiFi.macAddress();
+
+  String out;
+  serializeJson(doc, out);
+  String resultPacket = "MEASUREMENT_RESULT:" + out;
+
+  broadcastMessage(resultPacket);
+  broadcastMessage("CAPTURE_COMPLETE:" + capId);
+  isCapturing = false;
+}
+
+void handleCommand(String cmd) {
+  cmd.trim();
+  if (cmd == "PING" || cmd == "HELLO?") {
+    broadcastMessage("HELLO_ACK:{\\"device\\":\\"FSDP-ESP32-S3\\",\\"protocol\\":\\"FSDP-3.0\\",\\"firmware\\":\\"v3.2.0\\",\\"uid\\":\\"" + WiFi.macAddress() + "\\"}");
+  } else if (cmd.startsWith("CAPTURE")) {
+    String capId = "TEST001";
+    float refPower = 23.50;
+    if (cmd.indexOf("capture_id") != -1) {
+      int idIdx = cmd.indexOf("capture_id\\":\\"");
+      if (idIdx != -1) {
+        int endIdx = cmd.indexOf("\\"", idIdx + 14);
+        capId = cmd.substring(idIdx + 14, endIdx);
+      }
+    }
+    perform100SampleCapture(capId, refPower);
+  }
+}
+
+void handleHttpData() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.send(200, "application/json", json);
+  if (lastResultJson.length() > 0) {
+    server.send(200, "text/plain", lastResultJson);
+  } else {
+    float rawPower = (analogRead(PIN_ADC) / 4095.0) * 30.0;
+    server.send(200, "application/json", "{\\"intensity\\":" + String(rawPower, 2) + ",\\"average_power\\":" + String(rawPower, 2) + "}");
+  }
+}
+
+void handleHttpCommand() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  if (server.hasArg("plain")) {
+    String body = server.arg("plain");
+    handleCommand(body);
+    server.send(200, "text/plain", "OK");
+  } else if (server.hasArg("c")) {
+    handleCommand(server.arg("c"));
+    server.send(200, "text/plain", "OK");
+  } else {
+    server.send(400, "text/plain", "MISSING_CMD");
+  }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_TEXT) {
+    handleCommand((char*)payload);
+  }
 }
 
 void setup() {
   Serial.begin(115200);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println("");
-  Serial.print("ESP32 IP Address: ");
-  Serial.println(WiFi.localIP());
+  pinMode(PIN_GPIO5_CAPTURE, INPUT_PULLUP);
+  pinMode(PIN_GPIO6_NEXT, INPUT_PULLUP);
 
-  server.on("/data", handleData);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(300); Serial.print("."); }
+  Serial.println("\\nESP32 IP Address: " + WiFi.localIP().toString());
+
+  server.on("/data", handleHttpData);
+  server.on("/command", HTTP_POST, handleHttpCommand);
+  server.on("/cmd", HTTP_GET, handleHttpCommand);
   server.begin();
+
   webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
 }
 
 void loop() {
   server.handleClient();
   webSocket.loop();
 
-  float intensityVal = analogRead(34) * (30.0 / 4095.0);
-  String json = "{\\"intensity\\":" + String(intensityVal, 2) + ",\\"frequency\\":35.0,\\"pulseWidth\\":120.0,\\"temperature\\":31.5}";
-  
-  // Broadcast USB and WebSocket
-  Serial.println(json);
-  webSocket.broadcastTXT(json);
-  delay(250);
+  // GPIO5 Switch Hardware Trigger
+  if (digitalRead(PIN_GPIO5_CAPTURE) == LOW && !isCapturing) {
+    delay(50); // Debounce
+    if (digitalRead(PIN_GPIO5_CAPTURE) == LOW) {
+      broadcastMessage("EVENT:CAPTURE");
+      perform100SampleCapture("HW_GPIO5_" + String(millis()), 23.50);
+    }
+  }
+
+  // Serial Commands
+  if (Serial.available()) {
+    String line = Serial.readStringUntil('\\n');
+    handleCommand(line);
+  }
 }`;
                         navigator.clipboard.writeText(code);
-                        alert('ESP32 Dual Wi-Fi (WebSocket + HTTP) C++ Code copied to clipboard!');
+                        alert('ESP32 Complete Production Firmware (Wi-Fi + USB + GPIO5 + 100 Samples) copied!');
                       }}
                       className="px-2.5 py-1 bg-purple-900 hover:bg-purple-800 text-purple-200 border border-purple-700 rounded text-[10px] font-bold cursor-pointer"
                     >
@@ -2697,6 +2843,13 @@ void loop() {
           </div>
         </div>
       )}
+
+      {/* REAL-TIME OSCILLOSCOPE MODAL */}
+      <OscilloscopeModal
+        isOpen={showOscilloscopeModal}
+        onClose={() => setShowOscilloscopeModal(false)}
+        espStatus={espStatus}
+      />
     </div>
   );
 };

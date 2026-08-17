@@ -41,6 +41,13 @@ import { localDB } from '../../services/db';
 import { esp32Service } from '../../services/esp32Service';
 import { parseStepModules, STANDARD_SOURCE_COMPONENTS } from '../../services/rulesEngine';
 import { ConfirmModal, PromptModal } from '../common/ModalDialogs';
+import { 
+  exportModelPackage, 
+  validateModelPackage, 
+  checkDuplicateModel, 
+  commitImportModelPackage, 
+  ModelPackageFile 
+} from '../../services/modelPackageService';
 
 interface SettingsModelManagerWindowProps {
   models: FiberModel[];
@@ -87,6 +94,15 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
   const [importJsonText, setImportJsonText] = useState<string>('');
   const [showComponentsModal, setShowComponentsModal] = useState<boolean>(false);
   const [newCompInput, setNewCompInput] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Duplicate Model Import Handling Modal
+  const [duplicateModal, setDuplicateModal] = useState<{
+    isOpen: boolean;
+    pkg?: ModelPackageFile;
+    matchType?: 'id' | 'name';
+    existingName?: string;
+  }>({ isOpen: false });
 
   // Custom Dialog Modals (Replaces native prompt & confirm which fail in iframe)
   const [confirmModal, setConfirmModal] = useState<{
@@ -301,34 +317,72 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
 
   const handleExportModel = () => {
     if (!currentModel) return;
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentModel, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `${currentModel.brand}_${currentModel.modelName}_config.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    exportModelPackage(currentModel);
+  };
+
+  const processImportedPackage = (pkg: ModelPackageFile) => {
+    const dupCheck = checkDuplicateModel(pkg.model);
+    if (dupCheck.isDuplicate && dupCheck.existingModel) {
+      setDuplicateModal({
+        isOpen: true,
+        pkg,
+        matchType: dupCheck.matchType,
+        existingName: `${dupCheck.existingModel.brand} ${dupCheck.existingModel.modelName}`
+      });
+      return;
+    }
+
+    // Direct import if no conflict
+    const imported = commitImportModelPackage(pkg, 'new');
+    const updatedList = localDB.getModels();
+    onModelsChange(updatedList);
+    setSelectedModelId(imported.id);
+    onSelectModel(imported);
+    setShowImportModal(false);
+    setImportJsonText('');
+    alert(`Model Package "${imported.brand} ${imported.modelName}" imported successfully.`);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        const validation = validateModelPackage(parsed);
+
+        if (!validation.valid || !validation.modelPackage) {
+          alert(`❌ MODEL IMPORT FAILED:\n\n${validation.reason || 'Invalid Model Package format.'}\n\nNo changes were made to the database.`);
+          return;
+        }
+
+        processImportedPackage(validation.modelPackage);
+      } catch (err: any) {
+        alert(`❌ MODEL IMPORT FAILED:\n\nJSON syntax error in file: ${err.message}`);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleImportJson = () => {
     if (!importJsonText.trim()) return;
     try {
       const parsed = JSON.parse(importJsonText);
-      if (parsed && parsed.modelName && parsed.cycles) {
-        parsed.id = `model-imp-${Date.now()}`;
-        localDB.saveModel(parsed);
-        const updatedList = localDB.getModels();
-        onModelsChange(updatedList);
-        setSelectedModelId(parsed.id);
-        onSelectModel(parsed);
-        setShowImportModal(false);
-        setImportJsonText('');
-        alert('Model imported successfully.');
-      } else {
-        alert('Invalid Model JSON format.');
+      const validation = validateModelPackage(parsed);
+
+      if (!validation.valid || !validation.modelPackage) {
+        alert(`❌ MODEL IMPORT FAILED:\n\n${validation.reason || 'Invalid Model JSON structure.'}\n\nNo changes were made to the database.`);
+        return;
       }
-    } catch (e) {
-      alert('Error parsing JSON text.');
+
+      processImportedPackage(validation.modelPackage);
+    } catch (e: any) {
+      alert(`❌ MODEL IMPORT FAILED:\n\nJSON syntax error in text: ${e.message}`);
     }
   };
 
@@ -1413,28 +1467,55 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
 
       </div>
 
-      {/* IMPORT JSON MODAL */}
+      {/* HIDDEN FILE INPUT FOR .fsdmodel & .json */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileSelect}
+        accept=".fsdmodel,.json"
+        className="hidden"
+      />
+
+      {/* IMPORT MODEL MODAL */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-[#1F2937] border border-gray-700 rounded-xl p-5 max-w-lg w-full space-y-4 shadow-2xl">
             <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center justify-between">
-              <span>Import Model Configuration JSON</span>
+              <span>Import Model Package (.fsdmodel)</span>
               <button onClick={() => setShowImportModal(false)} className="text-gray-400 hover:text-white">
                 <X className="w-4 h-4" />
               </button>
             </h3>
 
-            <p className="text-xs text-gray-300">
-              Paste a valid Model JSON structure below to import into your local offline database:
+            <p className="text-xs text-gray-300 font-sans">
+              Select a single <strong>.fsdmodel</strong> package file (or valid Model JSON) to import a complete Laser Model with all its cycle modules and reference readings:
             </p>
 
-            <textarea
-              rows={8}
-              value={importJsonText}
-              onChange={(e) => setImportJsonText(e.target.value)}
-              placeholder="Paste Model JSON object here..."
-              className="w-full bg-[#111827] border border-gray-600 text-amber-300 font-mono text-xs p-3 rounded outline-none focus:border-amber-400"
-            />
+            {/* File Upload Button */}
+            <div className="bg-[#111827] border-2 border-dashed border-cyan-800/80 rounded-xl p-6 text-center space-y-3">
+              <Upload className="w-8 h-8 text-cyan-400 mx-auto animate-pulse" />
+              <div className="text-xs text-slate-300 font-sans">
+                Click below to choose a <strong>.fsdmodel</strong> file from your device:
+              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-lg shadow-lg active:scale-95 transition-all cursor-pointer inline-flex items-center gap-2"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Select .fsdmodel File</span>
+              </button>
+            </div>
+
+            <div className="relative border-t border-gray-700 pt-3">
+              <span className="text-[11px] text-gray-400 font-sans block mb-2">Or paste raw Model Package JSON below:</span>
+              <textarea
+                rows={5}
+                value={importJsonText}
+                onChange={(e) => setImportJsonText(e.target.value)}
+                placeholder="Paste Model Package JSON object here..."
+                className="w-full bg-[#111827] border border-gray-600 text-amber-300 font-mono text-xs p-3 rounded outline-none focus:border-amber-400"
+              />
+            </div>
 
             <div className="flex justify-end gap-2">
               <button
@@ -1447,7 +1528,78 @@ export const SettingsModelManagerWindow: React.FC<SettingsModelManagerWindowProp
                 onClick={handleImportJson}
                 className="px-4 py-1.5 bg-amber-600 text-white rounded text-xs font-bold hover:bg-amber-500"
               >
-                Import Model
+                Import from Text
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DUPLICATE MODEL CONFLICT MODAL */}
+      {duplicateModal.isOpen && duplicateModal.pkg && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#1F2937] border border-amber-600/80 rounded-xl p-5 max-w-md w-full space-y-4 shadow-2xl font-sans">
+            <h3 className="text-sm font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+              <Zap className="w-4 h-4 text-amber-400" />
+              <span>Model Already Exists</span>
+            </h3>
+
+            <p className="text-xs text-gray-200">
+              A model matching <strong>{duplicateModal.existingName}</strong> already exists in your local offline database.
+            </p>
+
+            <div className="bg-[#111827] p-3 rounded-lg border border-gray-700 text-xs text-slate-300 space-y-1 font-mono">
+              <div>Import Brand: <span className="text-amber-300">{duplicateModal.pkg.model.brand}</span></div>
+              <div>Import Name: <span className="text-amber-300">{duplicateModal.pkg.model.modelName}</span></div>
+              <div>Cycles: <span className="text-cyan-300">{duplicateModal.pkg.model.cycles?.length || 0}</span></div>
+            </div>
+
+            <p className="text-xs text-gray-300">
+              Please select how you wish to handle this duplicate model:
+            </p>
+
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => {
+                  if (duplicateModal.pkg) {
+                    const imported = commitImportModelPackage(duplicateModal.pkg, 'replace');
+                    const updatedList = localDB.getModels();
+                    onModelsChange(updatedList);
+                    setSelectedModelId(imported.id);
+                    onSelectModel(imported);
+                    setDuplicateModal({ isOpen: false });
+                    setShowImportModal(false);
+                    alert(`Replaced existing model "${imported.brand} ${imported.modelName}".`);
+                  }
+                }}
+                className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg shadow transition-all active:scale-95"
+              >
+                Replace Existing Model
+              </button>
+
+              <button
+                onClick={() => {
+                  if (duplicateModal.pkg) {
+                    const imported = commitImportModelPackage(duplicateModal.pkg, 'new');
+                    const updatedList = localDB.getModels();
+                    onModelsChange(updatedList);
+                    setSelectedModelId(imported.id);
+                    onSelectModel(imported);
+                    setDuplicateModal({ isOpen: false });
+                    setShowImportModal(false);
+                    alert(`Imported as new model "${imported.brand} ${imported.modelName}".`);
+                  }
+                }}
+                className="w-full py-2 bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-bold rounded-lg shadow transition-all active:scale-95"
+              >
+                Import as New Model (Unique ID)
+              </button>
+
+              <button
+                onClick={() => setDuplicateModal({ isOpen: false })}
+                className="w-full py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-bold rounded-lg transition-all"
+              >
+                Cancel Import
               </button>
             </div>
           </div>

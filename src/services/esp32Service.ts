@@ -81,6 +81,9 @@ class ESP32CommunicationService {
   private serialPort: any = null;
   private serialReader: any = null;
   private webSocket: WebSocket | null = null;
+  private wifiIpAddress: string = '';
+  private wifiHttpPort: number = 80;
+  private wifiWsPort: number = 81;
   private isRealHardwareConnected: boolean = false;
   private connectionLogListeners: Set<(log: string) => void> = new Set();
   private lastPongTime: number = 0;
@@ -130,7 +133,7 @@ class ESP32CommunicationService {
     return () => this.connectionLogListeners.delete(listener);
   }
 
-  private logConnection(log: string): void {
+  public logConnection(log: string): void {
     localDB.log('INFO', 'ESP32 Hardware', log);
     this.connectionLogListeners.forEach(fn => fn(log));
   }
@@ -445,6 +448,8 @@ class ESP32CommunicationService {
   // --- REAL WI-FI (WEBSOCKET & HTTP STREAM) INTEGRATION ---
   public async connectWiFiWebSocket(ipAddress: string, port: number = 81): Promise<boolean> {
     return new Promise(async (resolve, reject) => {
+      this.wifiIpAddress = ipAddress;
+      this.wifiWsPort = port;
       const wsUrl = `ws://${ipAddress}:${port}`;
       this.logConnection(`📡 Connecting to ESP32 Wi-Fi WebSocket: ${wsUrl}...`);
 
@@ -516,6 +521,8 @@ class ESP32CommunicationService {
 
   public async connectWiFiHTTPPolling(ipAddress: string, port: number = 80): Promise<boolean> {
     await this.disconnectHardware(true);
+    this.wifiIpAddress = ipAddress;
+    this.wifiHttpPort = port;
     const httpUrl = `http://${ipAddress}:${port}/data`;
     this.logConnection(`🌐 Connecting to ESP32 Wi-Fi HTTP Live Stream at ${httpUrl}...`);
 
@@ -572,6 +579,7 @@ class ESP32CommunicationService {
   }
 
   public async connectWiFiAuto(ipAddress: string, port: number = 81): Promise<boolean> {
+    this.wifiIpAddress = ipAddress;
     this.logConnection(`⚡ Auto-Detecting ESP32 Wi-Fi Protocol at ${ipAddress}:${port}...`);
     try {
       return await this.connectWiFiWebSocket(ipAddress, port);
@@ -584,24 +592,64 @@ class ESP32CommunicationService {
 
   public async writeToHardware(text: string): Promise<void> {
     const line = text.endsWith('\n') ? text : `${text}\n`;
+    const trimmed = text.trim();
+
     if (this.serialPort && this.serialPort.writable) {
       try {
         const writer = this.serialPort.writable.getWriter();
         const encoder = new TextEncoder();
         await writer.write(encoder.encode(line));
         writer.releaseLock();
-        this.logConnection(`[USB TX] ${line.trim()}`);
+        this.logConnection(`[USB TX] ${trimmed}`);
       } catch (e: any) {
         this.logConnection(`❌ USB Write Error: ${e.message || e}`);
       }
     } else if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
       this.webSocket.send(line);
-      this.logConnection(`[Wi-Fi TX] ${line.trim()}`);
+      this.logConnection(`[Wi-Fi WS TX] ${trimmed}`);
+    } else if (this.status.connected && this.wifiIpAddress) {
+      // Send over HTTP REST command endpoint for Wi-Fi HTTP Stream mode
+      const httpUrl = `http://${this.wifiIpAddress}:${this.wifiHttpPort}/command`;
+      this.logConnection(`[WIFI_COMMAND_SENT] ip=${this.wifiIpAddress} port=${this.wifiHttpPort} command=${trimmed}`);
+      
+      try {
+        const response = await fetch(httpUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: trimmed,
+          mode: 'cors'
+        });
+        if (response.ok) {
+          const respText = await response.text();
+          if (respText && respText.trim()) {
+            this.logConnection(`[HTTP TX ACK] ${respText.trim()}`);
+            this.parseAndEmitHardwareLine(respText.trim());
+          }
+        }
+      } catch (err: any) {
+        // Fallback to GET /cmd?c=... endpoint
+        try {
+          const getUrl = `http://${this.wifiIpAddress}:${this.wifiHttpPort}/cmd?c=${encodeURIComponent(trimmed)}`;
+          const getResp = await fetch(getUrl, { mode: 'cors' });
+          if (getResp.ok) {
+            const respText = await getResp.text();
+            if (respText && respText.trim()) {
+              this.parseAndEmitHardwareLine(respText.trim());
+            }
+          }
+        } catch (e: any) {
+          this.logConnection(`❌ Wi-Fi HTTP Command Error: ${e.message || e}`);
+        }
+      }
+    } else {
+      this.logConnection(`⚠️ Command dropped (No active hardware connection): ${trimmed}`);
     }
   }
 
   private hardwareEventListeners: Set<(event: 'CAPTURE' | 'NEXT') => void> = new Set();
   private captureEventListeners: Set<(event: CaptureEvent) => void> = new Set();
+  private rawSamplesListeners: Set<(samples: number[]) => void> = new Set();
+  private latestRawSamples: number[] = [];
 
   public subscribeHardwareEvents(listener: (event: 'CAPTURE' | 'NEXT') => void): () => void {
     this.hardwareEventListeners.add(listener);
@@ -613,10 +661,41 @@ class ESP32CommunicationService {
     return () => this.captureEventListeners.delete(listener);
   }
 
+  public subscribeRawSamples(listener: (samples: number[]) => void): () => void {
+    this.rawSamplesListeners.add(listener);
+    if (this.latestRawSamples.length > 0) {
+      listener(this.latestRawSamples);
+    }
+    return () => this.rawSamplesListeners.delete(listener);
+  }
+
+  public getLatestRawSamples(): number[] {
+    return [...this.latestRawSamples];
+  }
+
+  public updateRawSamplesBuffer(samples: number[]): void {
+    if (Array.isArray(samples) && samples.length > 0) {
+      this.latestRawSamples = samples.map(n => Number(n));
+      this.rawSamplesListeners.forEach(fn => fn(this.latestRawSamples));
+    }
+  }
+
   // --- PARSE INCOMING SENSOR READINGS FROM PHYSICAL HARDWARE ---
   private parseAndEmitHardwareLine(line: string) {
     try {
       const cleanLine = line.trim();
+      if (!cleanLine) return;
+
+      // Split multi-line blocks if present
+      if (cleanLine.includes('\n')) {
+        const subLines = cleanLine.split('\n');
+        for (const subLine of subLines) {
+          if (subLine.trim()) {
+            this.parseAndEmitHardwareLine(subLine.trim());
+          }
+        }
+        return;
+      }
 
       // Handshake Response: HELLO_ACK:{"device":"FSDP-ESP32-S3","protocol":"FSDP-3.0","firmware":"FSDP_TEST_3.0","uid":"<UID>"}
       if (cleanLine.includes('HELLO_ACK:')) {
@@ -651,13 +730,13 @@ class ESP32CommunicationService {
           return;
         }
         this.lastHardwareCaptureTime = now;
-        this.logConnection('🔘 Hardware Event Received: CAPTURE (GPIO5 Switch)');
+        this.logConnection('[ESP32_HARDWARE_EVENT_GPIO5] GPIO5 Capture Switch Triggered');
         this.hardwareEventListeners.forEach(fn => fn('CAPTURE'));
         return;
       }
 
       if (cleanLine === 'EVENT:NEXT' || cleanLine.includes('EVENT:NEXT')) {
-        this.logConnection('🔘 Hardware Event Received: NEXT (GPIO6 Switch)');
+        this.logConnection('[ESP32_HARDWARE_EVENT_GPIO6] GPIO6 Next Switch Triggered');
         this.hardwareEventListeners.forEach(fn => fn('NEXT'));
         return;
       }
@@ -665,7 +744,8 @@ class ESP32CommunicationService {
       // Protocol Event: CAPTURE_STARTED (e.g. CAPTURE_STARTED:TEST001 or CAPTURE_STARTED)
       if (cleanLine.startsWith('CAPTURE_STARTED')) {
         const captureId = cleanLine.includes(':') ? cleanLine.split(':')[1] : undefined;
-        this.logConnection(`⚡ ESP32 Protocol: CAPTURE_STARTED (${captureId || 'ACTIVE'})`);
+        this.logConnection(`[ESP32_CAPTURE_RECEIVED] capture_id=${captureId || 'ACTIVE'}`);
+        this.logConnection(`[ESP32_SAMPLES_STARTED] capture_id=${captureId || 'ACTIVE'} expected_samples=100`);
         this.status.isCapturing = true;
         this.notifyStatus();
         this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_STARTED', captureId }));
@@ -683,7 +763,7 @@ class ESP32CommunicationService {
       // Protocol Event: CAPTURE_COMPLETE (e.g. CAPTURE_COMPLETE:TEST001 or CAPTURE_COMPLETE)
       if (cleanLine.startsWith('CAPTURE_COMPLETE')) {
         const captureId = cleanLine.includes(':') ? cleanLine.split(':')[1] : undefined;
-        this.logConnection(`🏁 ESP32 Protocol: CAPTURE_COMPLETE (${captureId || 'COMPLETE'})`);
+        this.logConnection(`[ESP32_SAMPLES_COMPLETE] capture_id=${captureId || 'COMPLETE'} sample_count=100`);
         this.status.isCapturing = false;
         this.notifyStatus();
         this.captureEventListeners.forEach(fn => fn({ type: 'CAPTURE_COMPLETE', captureId }));
@@ -695,7 +775,10 @@ class ESP32CommunicationService {
         try {
           const jsonStr = cleanLine.substring(cleanLine.indexOf('MEASUREMENT_RESULT:') + 19).trim();
           const jsonObj = JSON.parse(jsonStr) as MeasurementResultPayload;
-          this.logConnection(`📊 ESP32 Measurement Engine: RESULT (Avg: ${jsonObj.average_power}W, Loss: ${jsonObj.optical_loss}%, Stab: ${jsonObj.stability}%)`);
+          if (jsonObj.raw_samples && Array.isArray(jsonObj.raw_samples)) {
+            this.updateRawSamplesBuffer(jsonObj.raw_samples);
+          }
+          this.logConnection(`[ESP32_MEASUREMENT_RESULT_SENT] capture_id=${jsonObj.capture_id} average_power=${jsonObj.average_power} intensity=${jsonObj.intensity} loss=${jsonObj.optical_loss} stability=${jsonObj.stability}`);
           this.captureEventListeners.forEach(fn => fn({ type: 'MEASUREMENT_RESULT', payload: jsonObj }));
           return;
         } catch (err) {
@@ -708,7 +791,10 @@ class ESP32CommunicationService {
         try {
           const jsonStr = cleanLine.substring(cleanLine.indexOf('SAMPLES:') + 8).trim();
           const jsonObj = JSON.parse(jsonStr);
-          this.logConnection(`📊 ESP32 Protocol: SAMPLES received (Count: ${jsonObj.sample_count || jsonObj.samples?.length})`);
+          if (jsonObj.samples && Array.isArray(jsonObj.samples)) {
+            this.updateRawSamplesBuffer(jsonObj.samples);
+          }
+          this.logConnection(`[ESP32_SAMPLES_COMPLETE] capture_id=${jsonObj.capture_id || 'N/A'} sample_count=${jsonObj.sample_count || jsonObj.samples?.length}`);
           this.captureEventListeners.forEach(fn => fn({ type: 'SAMPLES', payload: jsonObj }));
           return;
         } catch (err) {
@@ -1176,7 +1262,7 @@ class ESP32CommunicationService {
       await this.writeToHardware("CAPTURE\n");
 
       // Wait for real hardware READING packet with timeout fallback
-      return new Promise<ReadingParameters>((resolve) => {
+      return new Promise<ReadingParameters>((resolve, reject) => {
         let captureTimeout: any = null;
         let pendingReading: ReadingParameters | null = null;
 
@@ -1202,13 +1288,17 @@ class ESP32CommunicationService {
         captureTimeout = setTimeout(() => {
           unsubStream();
           unsubLogs();
-          const fallback = pendingReading || this.generateSensorReading(baseRef);
           this.status.isCapturing = false;
           this.notifyStatus();
-          this.emitPacket(2003, { command: 'GET_READING', reading: fallback });
-          localDB.log('INFO', 'ESP32 Capture', `Capture Finished: P_avg=${fallback.averagePower}W, Temp=${fallback.temperature}°C`);
-          resolve(fallback);
-        }, 3500);
+          if (pendingReading) {
+            this.emitPacket(2003, { command: 'GET_READING', reading: pendingReading });
+            localDB.log('INFO', 'ESP32 Capture', `Capture Finished: P_avg=${pendingReading.averagePower}W`);
+            resolve(pendingReading);
+          } else {
+            localDB.log('ERROR', 'ESP32 Capture', '❌ CAPTURE TIMEOUT: Physical ESP32 hardware did not respond within timeout.');
+            reject(new Error('CAPTURE TIMEOUT: Physical ESP32 hardware did not transmit reading packet within timeout.'));
+          }
+        }, 5500);
       });
     } else {
       // Wait 1.2s for simulated acquisition
