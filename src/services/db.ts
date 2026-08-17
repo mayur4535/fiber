@@ -713,38 +713,106 @@ class LocalDBService {
     exists?: boolean;
     error?: string;
   }> {
+    // 1. Electron IPC (Native Desktop App)
     if (typeof window !== 'undefined' && (window as any).require) {
       try {
         const { ipcRenderer } = (window as any).require('electron');
         if (ipcRenderer && typeof ipcRenderer.invoke === 'function') {
-          return await ipcRenderer.invoke('select-database-folder');
+          const res = await ipcRenderer.invoke('select-database-folder');
+          if (res && (!res.canceled || res.dbPath)) {
+            return res;
+          }
+          if (res && res.canceled) {
+            return { canceled: true };
+          }
         }
       } catch (e) {
         console.warn('Electron IPC select-database-folder failed:', e);
       }
     }
 
-    // Web Browser Fallback (if running outside Electron)
-    const currentPath = this.getDatabasePath();
-    const userFolder = prompt('Enter or paste folder path for FSDP_Database.db:', currentPath.replace(/[/\\]?FSDP_Database\.db$/, ''));
-    if (!userFolder || !userFolder.trim()) {
-      return { canceled: true };
-    }
-    const cleanFolder = userFolder.trim().replace(/[/\\]+$/, '');
-    const dbPath = `${cleanFolder}/FSDP_Database.db`;
+    // 2. HTML5 File System Access API (window.showDirectoryPicker in Chrome/Edge/Brave)
+    if (typeof window !== 'undefined' && typeof (window as any).showDirectoryPicker === 'function') {
+      try {
+        const dirHandle = await (window as any).showDirectoryPicker({
+          mode: 'readwrite'
+        });
+        if (dirHandle) {
+          const folderName = dirHandle.name;
+          let exists = false;
+          try {
+            await dirHandle.getFileHandle('FSDP_Database.db');
+            exists = true;
+          } catch (e) {
+            exists = false;
+          }
 
-    const fs = getNodeFs();
-    let exists = false;
-    if (fs) {
-      exists = fs.existsSync(dbPath);
+          const folderPath = `D:/FiberSourceDiagnosticPro/${folderName}`;
+          const dbPath = `${folderPath}/FSDP_Database.db`;
+
+          return {
+            canceled: false,
+            folderPath: folderPath,
+            dbPath: dbPath,
+            exists: exists
+          };
+        }
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          return { canceled: true };
+        }
+        console.warn('showDirectoryPicker failed or declined, using fallback:', err);
+      }
     }
 
-    return {
-      canceled: false,
-      folderPath: cleanFolder,
-      dbPath: dbPath,
-      exists: exists
-    };
+    // 3. Fallback: Trigger HTML native directory picker (<input type="file" webkitdirectory />)
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.setAttribute('webkitdirectory', '');
+      input.setAttribute('directory', '');
+
+      input.onchange = (e: any) => {
+        const files: FileList = e.target.files;
+        if (!files || files.length === 0) {
+          resolve({ canceled: true });
+          return;
+        }
+
+        let exists = false;
+        let folderName = '';
+
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          if (f.name === 'FSDP_Database.db') {
+            exists = true;
+          }
+          if (!folderName && f.webkitRelativePath) {
+            folderName = f.webkitRelativePath.split('/')[0];
+          }
+        }
+
+        if (!folderName && files[0]) {
+          folderName = files[0].name;
+        }
+
+        const folderPath = `D:/FiberSourceDiagnosticPro/${folderName || 'Data'}`;
+        const dbPath = `${folderPath}/FSDP_Database.db`;
+
+        resolve({
+          canceled: false,
+          folderPath: folderPath,
+          dbPath: dbPath,
+          exists: exists
+        });
+      };
+
+      input.oncancel = () => {
+        resolve({ canceled: true });
+      };
+
+      input.click();
+    });
   }
 
   public createNewDatabaseAtPath(newPath: string): void {
@@ -790,12 +858,18 @@ class LocalDBService {
     return true;
   }
 
-  public async openDatabaseFolder(): Promise<boolean> {
+  public async openDatabaseFolder(): Promise<{ openedInExplorer: boolean; folderPath: string; dbPath: string }> {
+    const currentPath = this.getDatabasePath();
+    const folderPath = currentPath.replace(/[/\\]?FSDP_Database\.db$/, '');
+
     if (typeof window !== 'undefined' && (window as any).require) {
       try {
         const { ipcRenderer } = (window as any).require('electron');
         if (ipcRenderer && typeof ipcRenderer.invoke === 'function') {
-          return await ipcRenderer.invoke('open-database-folder', this.getDatabasePath());
+          const res = await ipcRenderer.invoke('open-database-folder', currentPath);
+          if (res) {
+            return { openedInExplorer: true, folderPath, dbPath: currentPath };
+          }
         }
       } catch (e) {
         console.warn('Electron IPC open-database-folder failed:', e);
@@ -806,16 +880,16 @@ class LocalDBService {
     const pathModule = getNodePath();
 
     if (electron && electron.shell && pathModule) {
-      const fullPath = pathModule.isAbsolute(this.currentDbPath)
-        ? this.currentDbPath
-        : pathModule.join(process.cwd(), this.currentDbPath);
+      const fullPath = pathModule.isAbsolute(currentPath)
+        ? currentPath
+        : pathModule.join(process.cwd(), currentPath);
 
       electron.shell.showItemInFolder(fullPath);
-      return true;
+      return { openedInExplorer: true, folderPath, dbPath: currentPath };
     } else {
-      // Browser fallback: trigger export download
-      this.exportSQLiteDatabaseFile();
-      return true;
+      // In Web Browser preview: Do NOT download file automatically!
+      // Return info object so the UI can display the folder path/details in a modal without triggering file download.
+      return { openedInExplorer: false, folderPath, dbPath: currentPath };
     }
   }
 

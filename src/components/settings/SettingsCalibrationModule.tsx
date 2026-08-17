@@ -32,7 +32,8 @@ import {
   Mail,
   User as UserIcon,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  Copy
 } from 'lucide-react';
 import { AppSettings, CalibrationData, AppUserRole, FiberModel } from '../../types';
 import { localDB } from '../../services/db';
@@ -115,6 +116,16 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
 
   const [showImportConfirmModal, setShowImportConfirmModal] = useState<boolean>(false);
   const [pendingImportBinary, setPendingImportBinary] = useState<Uint8Array | null>(null);
+
+  const [showFolderInfoModal, setShowFolderInfoModal] = useState<boolean>(false);
+  const [copiedFolderToast, setCopiedFolderToast] = useState<boolean>(false);
+
+  const handleOpenDatabaseFolder = async () => {
+    const res = await localDB.openDatabaseFolder();
+    if (!res.openedInExplorer) {
+      setShowFolderInfoModal(true);
+    }
+  };
 
   const handleSelectFolderLocation = async () => {
     const result = await localDB.selectDatabaseFolderNative();
@@ -488,7 +499,7 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
 
                   <button
                     type="button"
-                    onClick={() => localDB.openDatabaseFolder()}
+                    onClick={handleOpenDatabaseFolder}
                     className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
                   >
                     <HardDrive className="w-3.5 h-3.5 text-amber-400" />
@@ -1705,6 +1716,87 @@ void loop() {
               >
                 <Upload className="w-4 h-4" />
                 <span>Import Database</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DATABASE FOLDER LOCATION & INFO MODAL (Web Browser View) */}
+      {showFolderInfoModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-amber-500 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl relative font-mono text-xs text-white">
+            <button
+              onClick={() => setShowFolderInfoModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                <HardDrive className="w-5 h-5 text-amber-400" />
+                <span>SQLITE DATABASE FOLDER LOCATION</span>
+              </h3>
+              <p className="text-gray-300 text-[11px] font-sans">
+                Your local SQLite database is active and stored in the following directory location.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="bg-black/80 border border-gray-800 rounded p-3 space-y-1">
+                <span className="text-[10px] text-gray-400 font-sans block">DATABASE FOLDER PATH:</span>
+                <span className="text-emerald-300 font-mono text-xs break-all select-all block">
+                  {localDB.getDatabasePath().replace(/[/\\]?FSDP_Database\.db$/, '')}
+                </span>
+              </div>
+
+              <div className="bg-black/80 border border-gray-800 rounded p-3 space-y-1">
+                <span className="text-[10px] text-gray-400 font-sans block">DATABASE FILE:</span>
+                <span className="text-amber-300 font-mono text-xs font-bold block">
+                  FSDP_Database.db
+                </span>
+              </div>
+            </div>
+
+            {copiedFolderToast && (
+              <div className="p-2 bg-emerald-950 border border-emerald-500/50 rounded text-emerald-300 text-[11px] font-sans font-bold text-center">
+                ✓ Path copied to clipboard!
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(localDB.getDatabasePath().replace(/[/\\]?FSDP_Database\.db$/, ''));
+                  setCopiedFolderToast(true);
+                  setTimeout(() => setCopiedFolderToast(false), 2500);
+                }}
+                className="px-3.5 py-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded font-bold border border-gray-700 flex items-center gap-1.5"
+              >
+                <Copy className="w-3.5 h-3.5 text-amber-400" />
+                <span>Copy Path</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFolderInfoModal(false);
+                  handleSelectFolderLocation();
+                }}
+                className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded font-bold shadow flex items-center gap-1.5"
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+                <span>Change Folder</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowFolderInfoModal(false)}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold shadow"
+              >
+                Close
               </button>
             </div>
           </div>
