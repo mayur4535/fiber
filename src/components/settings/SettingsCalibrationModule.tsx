@@ -104,11 +104,36 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
   const [syncResultStatus, setSyncResultStatus] = useState<string | null>(null);
 
-  // SQLite Database Location & Backup Modal States
-  const [showChangeLocationModal, setShowChangeLocationModal] = useState<boolean>(false);
-  const [newDbPathInput, setNewDbPathInput] = useState<string>(localDB.getDatabasePath());
+  // SQLite Native Database Location & Backup Modal States
+  const [showExistingDbModal, setShowExistingDbModal] = useState<boolean>(false);
+  const [showNotFoundDbModal, setShowNotFoundDbModal] = useState<boolean>(false);
+  const [pendingDbLocation, setPendingDbLocation] = useState<{
+    folderPath: string;
+    dbPath: string;
+    exists: boolean;
+  } | null>(null);
+
   const [showImportConfirmModal, setShowImportConfirmModal] = useState<boolean>(false);
   const [pendingImportBinary, setPendingImportBinary] = useState<Uint8Array | null>(null);
+
+  const handleSelectFolderLocation = async () => {
+    const result = await localDB.selectDatabaseFolderNative();
+    if (result.canceled || !result.dbPath) {
+      return;
+    }
+
+    setPendingDbLocation({
+      folderPath: result.folderPath || '',
+      dbPath: result.dbPath,
+      exists: !!result.exists
+    });
+
+    if (result.exists) {
+      setShowExistingDbModal(true);
+    } else {
+      setShowNotFoundDbModal(true);
+    }
+  };
 
   useEffect(() => {
     const unsub = subscribeAuthState((u) => {
@@ -423,19 +448,29 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-gray-800 pb-2">
                   <div className="flex items-center gap-2">
                     <Database className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs font-bold text-white uppercase">Local PC Database Status</span>
+                    <span className="text-xs font-bold text-white uppercase">DATABASE / STORAGE</span>
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-bold">
                       ACTIVE
                     </span>
                   </div>
                   <span className="text-[10px] text-gray-400">
-                    Database File: <strong className="text-gray-200">FSDP_Database.db</strong>
+                    Single Database File: <strong className="text-gray-200">FSDP_Database.db</strong>
                   </span>
                 </div>
 
+                {localDB.getInitError() && (
+                  <div className="bg-red-950/90 border border-red-600 rounded-lg p-3 text-red-200 text-xs font-mono flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+                    <div>
+                      <span className="font-bold block text-red-300">DATABASE INITIALIZATION ERROR</span>
+                      <span>{localDB.getInitError()}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-1">
-                  <span className="text-[11px] text-gray-400 block font-sans">Current Physical Storage Location:</span>
-                  <div className="bg-black/80 border border-gray-800 rounded p-2 text-[11px] text-emerald-400 break-all select-all flex justify-between items-center">
+                  <span className="text-[11px] text-gray-400 block font-sans">Database Location:</span>
+                  <div className="bg-black/80 border border-gray-800 rounded p-2.5 text-[11px] text-emerald-400 break-all select-all flex justify-between items-center font-mono">
                     <span>{localDB.getDatabasePath()}</span>
                   </div>
                 </div>
@@ -444,13 +479,10 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      setNewDbPathInput(localDB.getDatabasePath());
-                      setShowChangeLocationModal(true);
-                    }}
-                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
+                    onClick={handleSelectFolderLocation}
+                    className="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[11px] font-bold border border-emerald-500 flex items-center justify-center gap-1.5 transition-colors shadow"
                   >
-                    <FolderTree className="w-3.5 h-3.5 text-cyan-400" />
+                    <FolderTree className="w-3.5 h-3.5 text-emerald-200" />
                     <span>Change Location</span>
                   </button>
 
@@ -460,19 +492,19 @@ export const SettingsCalibrationModule: React.FC<SettingsCalibrationModuleProps>
                     className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
                   >
                     <HardDrive className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Open Folder</span>
+                    <span>Open Database Folder</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => localDB.exportSQLiteDatabaseFile()}
-                    className="px-3 py-2 bg-emerald-800 hover:bg-emerald-700 text-white rounded text-[11px] font-bold border border-emerald-600 flex items-center justify-center gap-1.5 transition-colors shadow"
+                    className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow"
                   >
                     <Download className="w-3.5 h-3.5 text-emerald-300" />
                     <span>Export Database</span>
                   </button>
 
-                  <label className="px-3 py-2 bg-blue-800 hover:bg-blue-700 text-white rounded text-[11px] font-bold border border-blue-600 flex items-center justify-center gap-1.5 transition-colors shadow cursor-pointer">
+                  <label className="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded text-[11px] font-bold border border-gray-700 flex items-center justify-center gap-1.5 transition-colors shadow cursor-pointer">
                     <Upload className="w-3.5 h-3.5 text-blue-300" />
                     <span>Import Database</span>
                     <input
@@ -1506,12 +1538,12 @@ void loop() {
         </div>
       )}
 
-      {/* CHANGE DATABASE LOCATION MODAL */}
-      {showChangeLocationModal && (
+      {/* EXISTING DATABASE FOUND MODAL */}
+      {showExistingDbModal && pendingDbLocation && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl relative font-mono text-xs">
+          <div className="bg-gray-900 border border-emerald-600 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl relative font-mono text-xs">
             <button
-              onClick={() => setShowChangeLocationModal(false)}
+              onClick={() => setShowExistingDbModal(false)}
               className="absolute top-4 right-4 text-gray-400 hover:text-white"
             >
               <XCircle className="w-5 h-5" />
@@ -1519,32 +1551,27 @@ void loop() {
 
             <div className="space-y-1">
               <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
-                <FolderTree className="w-5 h-5 text-emerald-400" />
-                <span>CHANGE LOCAL SQLITE DATABASE LOCATION</span>
+                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                <span>EXISTING DATABASE DETECTED</span>
               </h3>
-              <p className="text-gray-400 text-[11px] font-sans">
-                Specify custom path for <code className="text-emerald-300">FSDP_Database.db</code> file.
+              <p className="text-gray-300 text-[11px] font-sans">
+                An existing <code className="text-emerald-300 font-bold">FSDP_Database.db</code> file was found in the selected folder.
               </p>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-gray-300 font-semibold block">Database File Path:</label>
-              <input
-                type="text"
-                value={newDbPathInput}
-                onChange={(e) => setNewDbPathInput(e.target.value)}
-                placeholder="FiberSourceDiagnosticPro/Data/FSDP_Database.db"
-                className="w-full bg-black border border-gray-700 text-emerald-400 text-xs rounded p-2.5 font-mono focus:outline-none focus:border-emerald-500"
-              />
-              <p className="text-[10px] text-gray-500">
-                Example: <code className="text-gray-400">D:\LaserDiagnostics\Data\FSDP_Database.db</code>
-              </p>
+            <div className="bg-black/80 border border-emerald-900/60 rounded p-3 text-[11px] text-emerald-300 break-all select-all font-mono space-y-1">
+              <span className="text-[10px] text-gray-500 uppercase block font-sans">Selected Database Path:</span>
+              <span>{pendingDbLocation.dbPath}</span>
             </div>
+
+            <p className="text-gray-200 text-xs font-sans">
+              Do you want to connect to and use this existing database?
+            </p>
 
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setShowChangeLocationModal(false)}
+                onClick={() => setShowExistingDbModal(false)}
                 className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
               >
                 Cancel
@@ -1552,17 +1579,80 @@ void loop() {
               <button
                 type="button"
                 onClick={() => {
-                  if (newDbPathInput.trim()) {
-                    localDB.locateDatabaseFile(newDbPathInput.trim());
-                    const updated = { ...localSettings, dbPath: newDbPathInput.trim() };
+                  if (pendingDbLocation.dbPath) {
+                    localDB.locateDatabaseFile(pendingDbLocation.dbPath);
+                    const updated = { ...localSettings, dbPath: pendingDbLocation.dbPath };
                     setLocalSettings(updated);
                     onSettingsSaved(updated);
-                    setShowChangeLocationModal(false);
+                    setShowExistingDbModal(false);
                   }
                 }}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold shadow"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-bold shadow flex items-center gap-1.5"
               >
-                Save & Set Location
+                <Database className="w-4 h-4" />
+                <span>Use Existing Database</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DATABASE NOT FOUND MODAL */}
+      {showNotFoundDbModal && pendingDbLocation && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-amber-600 rounded-2xl w-full max-w-lg p-6 space-y-4 shadow-2xl relative font-mono text-xs">
+            <button
+              onClick={() => setShowNotFoundDbModal(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-white"
+            >
+              <XCircle className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                <span>DATABASE NOT FOUND</span>
+              </h3>
+              <p className="text-gray-300 text-[11px] font-sans">
+                The selected folder does not contain an <code className="text-amber-300 font-bold">FSDP_Database.db</code>.
+              </p>
+            </div>
+
+            <div className="space-y-2 font-mono">
+              <div className="bg-black/80 border border-gray-800 rounded p-2.5 text-[11px]">
+                <span className="text-[10px] text-gray-500 uppercase block font-sans">Selected Folder:</span>
+                <span className="text-gray-300 break-all">{pendingDbLocation.folderPath}</span>
+              </div>
+
+              <div className="bg-black/80 border border-amber-900/60 rounded p-2.5 text-[11px]">
+                <span className="text-[10px] text-amber-400 uppercase block font-sans">Target Database File:</span>
+                <span className="text-amber-300 break-all">{pendingDbLocation.dbPath}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowNotFoundDbModal(false)}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingDbLocation.dbPath) {
+                    localDB.createNewDatabaseAtPath(pendingDbLocation.dbPath);
+                    const updated = { ...localSettings, dbPath: pendingDbLocation.dbPath };
+                    setLocalSettings(updated);
+                    onSettingsSaved(updated);
+                    setShowNotFoundDbModal(false);
+                  }
+                }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold shadow flex items-center gap-1.5"
+              >
+                <Database className="w-4 h-4" />
+                <span>Create New Database</span>
               </button>
             </div>
           </div>

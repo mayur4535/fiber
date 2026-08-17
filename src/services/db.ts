@@ -111,13 +111,19 @@ class LocalDBService {
   private isInitialized: boolean = false;
   private currentDbPath: string = DEFAULT_DB_PATH;
   private isMissingDbFile: boolean = false;
+  private initError: string | null = null;
   private memoryLogs: SystemLog[] = [];
 
   constructor() {
     // Asynchronously initialize SQLite engine
     this.initSQLite().catch((err) => {
       console.error('SQLite initialization failed:', err);
+      this.initError = err.message || String(err);
     });
+  }
+
+  public getInitError(): string | null {
+    return this.initError;
   }
 
   public async initSQLite(): Promise<void> {
@@ -146,8 +152,9 @@ class LocalDBService {
             this.SQL = await initSqlJs({
               locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`
             });
-          } catch (e) {
-            console.error('All SQLite WASM initialization attempts failed. Operating in localStorage fallback mode.', e);
+          } catch (e: any) {
+            this.initError = 'All SQLite WebAssembly initialization attempts failed. Please ensure WASM support is enabled.';
+            console.error('All SQLite WASM initialization attempts failed.', e);
           }
         }
       }
@@ -208,11 +215,14 @@ class LocalDBService {
         this.migrateFromLocalStorageIfNeeded();
         this.seedDefaultsIfEmpty();
         this.persistDatabaseToDisk();
+      } else if (!this.SQL) {
+        this.initError = 'SQLite engine (sql.js) failed to load.';
       }
 
       this.isInitialized = true;
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error during SQLite initialization:', err);
+      this.initError = err.message || String(err);
       this.isInitialized = true;
     }
   }
@@ -696,6 +706,47 @@ class LocalDBService {
     return this.isMissingDbFile;
   }
 
+  public async selectDatabaseFolderNative(): Promise<{
+    canceled: boolean;
+    folderPath?: string;
+    dbPath?: string;
+    exists?: boolean;
+    error?: string;
+  }> {
+    if (typeof window !== 'undefined' && (window as any).require) {
+      try {
+        const { ipcRenderer } = (window as any).require('electron');
+        if (ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+          return await ipcRenderer.invoke('select-database-folder');
+        }
+      } catch (e) {
+        console.warn('Electron IPC select-database-folder failed:', e);
+      }
+    }
+
+    // Web Browser Fallback (if running outside Electron)
+    const currentPath = this.getDatabasePath();
+    const userFolder = prompt('Enter or paste folder path for FSDP_Database.db:', currentPath.replace(/[/\\]?FSDP_Database\.db$/, ''));
+    if (!userFolder || !userFolder.trim()) {
+      return { canceled: true };
+    }
+    const cleanFolder = userFolder.trim().replace(/[/\\]+$/, '');
+    const dbPath = `${cleanFolder}/FSDP_Database.db`;
+
+    const fs = getNodeFs();
+    let exists = false;
+    if (fs) {
+      exists = fs.existsSync(dbPath);
+    }
+
+    return {
+      canceled: false,
+      folderPath: cleanFolder,
+      dbPath: dbPath,
+      exists: exists
+    };
+  }
+
   public createNewDatabaseAtPath(newPath: string): void {
     if (!this.SQL) return;
     this.currentDbPath = newPath;
@@ -711,20 +762,46 @@ class LocalDBService {
 
   public locateDatabaseFile(existingPath: string): boolean {
     const fs = getNodeFs();
-    if (fs && !fs.existsSync(existingPath)) {
-      return false;
+    if (fs) {
+      if (!fs.existsSync(existingPath)) {
+        return false;
+      }
+      try {
+        const buffer = fs.readFileSync(existingPath);
+        if (this.SQL) {
+          this.db = new this.SQL.Database(new Uint8Array(buffer));
+        }
+      } catch (e) {
+        console.error('Failed to read existing SQLite database from disk:', e);
+        return false;
+      }
     }
 
     this.currentDbPath = existingPath;
     this.isMissingDbFile = false;
-    this.initSQLite().catch(() => {});
+
+    if (this.db) {
+      this.createTablesSchema();
+      this.seedDefaultsIfEmpty();
+    }
 
     const currentSettings = this.getSettings();
     this.saveSettings({ ...currentSettings, dbPath: existingPath });
     return true;
   }
 
-  public openDatabaseFolder(): void {
+  public async openDatabaseFolder(): Promise<boolean> {
+    if (typeof window !== 'undefined' && (window as any).require) {
+      try {
+        const { ipcRenderer } = (window as any).require('electron');
+        if (ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+          return await ipcRenderer.invoke('open-database-folder', this.getDatabasePath());
+        }
+      } catch (e) {
+        console.warn('Electron IPC open-database-folder failed:', e);
+      }
+    }
+
     const electron = getNodeElectron();
     const pathModule = getNodePath();
 
@@ -734,9 +811,11 @@ class LocalDBService {
         : pathModule.join(process.cwd(), this.currentDbPath);
 
       electron.shell.showItemInFolder(fullPath);
+      return true;
     } else {
       // Browser fallback: trigger export download
       this.exportSQLiteDatabaseFile();
+      return true;
     }
   }
 

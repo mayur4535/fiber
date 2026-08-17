@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import electronUpdater from 'electron-updater';
 const { autoUpdater } = electronUpdater;
@@ -85,6 +86,65 @@ function createWindow() {
 
   ipcMain.on('quit-and-install', () => {
     autoUpdater.quitAndInstall();
+  });
+
+  // Native Windows Folder Picker for SQLite FSDP_Database.db
+  ipcMain.handle('select-database-folder', async (event) => {
+    try {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select Folder for MAYUR FIBER DIAGNOSIS Database (FSDP_Database.db)',
+        properties: ['openDirectory', 'createDirectory'],
+        buttonLabel: 'Select Folder'
+      });
+
+      if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+        return { canceled: true };
+      }
+
+      const selectedFolder = result.filePaths[0];
+      const dbPath = path.join(selectedFolder, 'FSDP_Database.db');
+      const exists = fs.existsSync(dbPath);
+
+      return {
+        canceled: false,
+        folderPath: selectedFolder,
+        dbPath: dbPath,
+        exists: exists
+      };
+    } catch (err) {
+      console.error('Error selecting database folder:', err);
+      return { canceled: true, error: err.message || String(err) };
+    }
+  });
+
+  // Open Database Folder in Windows Explorer
+  ipcMain.handle('open-database-folder', async (event, filePath) => {
+    if (!filePath) return false;
+    try {
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+      const dirPath = path.dirname(fullPath);
+      if (fs.existsSync(dirPath)) {
+        await shell.openPath(dirPath);
+        return true;
+      } else if (fs.existsSync(fullPath)) {
+        shell.showItemInFolder(fullPath);
+        return true;
+      }
+    } catch (e) {
+      console.error('Failed to open database folder in Windows Explorer:', e);
+    }
+    return false;
+  });
+
+  // Check if database file exists on disk
+  ipcMain.handle('check-database-file-exists', async (event, filePath) => {
+    if (!filePath) return false;
+    try {
+      const fullPath = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+      return fs.existsSync(fullPath);
+    } catch (e) {
+      return false;
+    }
   });
 
   // Remove menu bar for clean app look, but keep F12 DevTools shortcut

@@ -173,14 +173,26 @@ export function generatePdfReport(report: DiagnosisReport): jsPDF {
   y += 5;
 
   report.triggeredRules.forEach((rule) => {
+    if (y > pageHeight - 45) {
+      doc.addPage();
+      y = 20;
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    const diagLines: string[] = doc.splitTextToSize(`Diagnosis: ${rule.diagnosisText}`, pageWidth - 36);
+    const causeLines: string[] = doc.splitTextToSize(`Probable Cause: ${rule.probableCauses.join(' | ')}`, pageWidth - 36);
+
+    const boxHeight = 8 + (diagLines.length * 4) + (causeLines.length * 4) + 2;
+
     doc.setFillColor(254, 243, 199); // light warning yellow box
     if (rule.severity === 'Critical') doc.setFillColor(254, 226, 226); // light red box
     if (rule.severity === 'Information') doc.setFillColor(240, 253, 244); // light green box
 
-    doc.rect(14, y, pageWidth - 28, 22, 'F');
+    doc.rect(14, y, pageWidth - 28, boxHeight, 'F');
     doc.setDrawColor(217, 119, 6);
     if (rule.severity === 'Critical') doc.setDrawColor(220, 38, 38);
-    doc.rect(14, y, pageWidth - 28, 22, 'S');
+    doc.rect(14, y, pageWidth - 28, boxHeight, 'S');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8.5);
@@ -189,14 +201,16 @@ export function generatePdfReport(report: DiagnosisReport): jsPDF {
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    doc.text(`Diagnosis: ${rule.diagnosisText}`, 18, y + 10, { maxWidth: pageWidth - 36 });
-    doc.text(`Probable Cause: ${rule.probableCauses.join(' | ')}`, 18, y + 17, { maxWidth: pageWidth - 36 });
+    doc.text(diagLines, 18, y + 9);
 
-    y += 25;
+    const diagEndY = y + 9 + (diagLines.length * 4);
+    doc.text(causeLines, 18, diagEndY);
+
+    y += boxHeight + 4;
   });
 
   // --- STEP-BY-STEP REPAIR ACTIONS ---
-  if (y > pageHeight - 60) {
+  if (y > pageHeight - 50) {
     doc.addPage();
     y = 20;
   }
@@ -209,19 +223,35 @@ export function generatePdfReport(report: DiagnosisReport): jsPDF {
   y += 5;
 
   report.repairSteps.forEach((step, idx) => {
+    if (y > pageHeight - 25) {
+      doc.addPage();
+      y = 20;
+    }
+
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(30, 41, 59);
-    doc.text(`${idx + 1}. ${step}`, 18, y, { maxWidth: pageWidth - 36 });
-    y += 5;
+
+    const stepText = `${idx + 1}. ${step}`;
+    const stepLines: string[] = doc.splitTextToSize(stepText, pageWidth - 36);
+
+    doc.text(stepLines, 18, y);
+    y += (stepLines.length * 4.5) + 2.5;
   });
 
-  y += 4;
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(234, 88, 12);
-  doc.text(`Next Suggested Test: ${report.nextTestRecommendation}`, 14, y);
+  y += 2;
 
-  y += 12;
+  if (y > pageHeight - 30) {
+    doc.addPage();
+    y = 20;
+  }
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.setTextColor(234, 88, 12);
+  const nextTestLines: string[] = doc.splitTextToSize(`Next Suggested Test: ${report.nextTestRecommendation}`, pageWidth - 28);
+  doc.text(nextTestLines, 14, y);
+  y += (nextTestLines.length * 4.5) + 6;
 
   // --- SIGNATURE BLOCK ---
   if (y > pageHeight - 40) {
@@ -260,5 +290,131 @@ export function generatePdfReport(report: DiagnosisReport): jsPDF {
 export function downloadPdfReport(report: DiagnosisReport): void {
   const doc = generatePdfReport(report);
   const fileName = `FSDP_Report_${report.id}_${report.brand}_${report.modelName.replace(/\s+/g, '_')}.pdf`;
+  doc.save(fileName);
+}
+
+export function downloadDualPdfReport(ruleReport: DiagnosisReport, aiReport: DiagnosisReport): void {
+  const doc = generatePdfReport(ruleReport);
+  
+  // Add 2nd page for Google AI Diagnosis
+  doc.addPage();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  // Header Banner for Page 2
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, 28, 'F');
+
+  doc.setTextColor(168, 85, 247); // Purple
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('GOOGLE AI (GEMINI) NEURAL DIAGNOSIS REPORT', 14, 12);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Report ID: ${ruleReport.id}  |  Model: ${ruleReport.brand} ${ruleReport.modelName}  |  Serial: ${ruleReport.serialNumber}`, 14, 20);
+
+  let y = 34;
+
+  // AI Summary Card
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  const verdictLines: string[] = doc.splitTextToSize(`Verdict: ${aiReport.evidenceSummary}`, pageWidth - 36);
+  const cardHeight = 20 + (verdictLines.length * 4.5);
+
+  doc.setFillColor(31, 41, 55);
+  doc.rect(14, y, pageWidth - 28, cardHeight, 'F');
+
+  doc.setTextColor(168, 85, 247);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('GOOGLE AI NEURAL DIAGNOSIS SUMMARY', 18, y + 6);
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Isolated Fault Location: ${aiReport.primaryFaultLocation}`, 18, y + 11);
+  doc.text(`AI Health Score: ${aiReport.healthScore}/100 (${aiReport.healthGrade})  |  Status: ${aiReport.overallStatus}`, 18, y + 16);
+  doc.text(verdictLines, 18, y + 21);
+
+  y += cardHeight + 6;
+
+  // AI Optical Physics Explanation
+  if (aiReport.aiExplanation) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    const explLines: string[] = doc.splitTextToSize(aiReport.aiExplanation, pageWidth - 36);
+    const explBoxHeight = 8 + (explLines.length * 4) + 2;
+
+    doc.setFillColor(243, 232, 255); // Light purple
+    doc.rect(14, y, pageWidth - 28, explBoxHeight, 'F');
+    doc.setDrawColor(168, 85, 247);
+    doc.rect(14, y, pageWidth - 28, explBoxHeight, 'S');
+
+    doc.setTextColor(88, 28, 135);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('OPTICAL PHYSICS BREAKDOWN (GEMINI NEURAL ANALYSIS):', 18, y + 5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(explLines, 18, y + 9);
+
+    y += explBoxHeight + 6;
+  }
+
+  // AI Probable Causes
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('GOOGLE AI LIKELIHOOD PROBABLE CAUSES', 14, y);
+
+  y += 5;
+
+  aiReport.probableCauses.forEach((p, idx) => {
+    if (y > pageHeight - 20) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    const causeText = `${idx + 1}. ${p.cause} (${p.probability}% Likelihood)`;
+    const cLines: string[] = doc.splitTextToSize(causeText, pageWidth - 36);
+    doc.text(cLines, 18, y);
+    y += (cLines.length * 4.5) + 1.5;
+  });
+
+  y += 4;
+
+  // AI Repair Steps
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text('GOOGLE AI RECOMMENDED REPAIR STEPS', 14, y);
+
+  y += 5;
+
+  aiReport.repairSteps.forEach((s, idx) => {
+    if (y > pageHeight - 20) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    const stepText = `Step ${idx + 1}: ${s}`;
+    const sLines: string[] = doc.splitTextToSize(stepText, pageWidth - 36);
+    doc.text(sLines, 18, y);
+    y += (sLines.length * 4.5) + 2;
+  });
+
+  y += 10;
+  doc.setFontSize(7);
+  doc.setTextColor(148, 163, 184);
+  doc.text('Fiber Source Diagnostic Pro - Dual Engine Diagnostic Report (User Rules + Google AI) - Page 2', 14, pageHeight - 8);
+
+  const fileName = `FSDP_DualReport_${ruleReport.id}_${ruleReport.brand}_${ruleReport.modelName.replace(/\s+/g, '_')}.pdf`;
   doc.save(fileName);
 }
