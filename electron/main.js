@@ -147,14 +147,106 @@ function createWindow() {
     }
   });
 
+  // Target port tracking for Electron Web Serial selection
+  let targetSelectedPortName = null;
+
+  ipcMain.handle('set-target-serial-port', (event, portName) => {
+    targetSelectedPortName = portName ? String(portName).trim() : null;
+    return true;
+  });
+
+  // Enumerate all actual Windows Device Manager COM Ports
+  ipcMain.handle('get-serial-ports', async () => {
+    return new Promise((resolve) => {
+      if (process.platform !== 'win32') {
+        resolve([]);
+        return;
+      }
+
+      // Query Windows PnP Device Manager for friendly names (e.g. "USB-Enhanced-SERIAL CH34S (COM8)")
+      const psCmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Ports' -or $_.Name -match '\\(COM\\d+\\)' } | Select-Object -Property Name, DeviceID, Manufacturer | ConvertTo-Json"`;
+
+      import('child_process').then(({ exec }) => {
+        exec(psCmd, { timeout: 3500 }, (error, stdout) => {
+          if (!error && stdout && stdout.trim()) {
+            try {
+              const parsed = JSON.parse(stdout.trim());
+              const list = Array.isArray(parsed) ? parsed : [parsed];
+              const ports = [];
+              for (const item of list) {
+                if (!item || !item.Name) continue;
+                const rawName = String(item.Name).trim();
+                const match = rawName.match(/\((COM\d+)\)/i);
+                const comPort = match ? match[1].toUpperCase() : (rawName.match(/COM\d+/i) ? rawName.match(/COM\d+/i)[0].toUpperCase() : null);
+                if (comPort) {
+                  const desc = rawName.replace(/\s*\(COM\d+\)\s*/i, '').trim();
+                  const label = desc ? `${comPort} — ${desc}` : `${comPort} — Serial Device`;
+                  ports.push({
+                    port: comPort,
+                    name: rawName,
+                    label: label,
+                    deviceId: item.DeviceID || '',
+                    manufacturer: item.Manufacturer || ''
+                  });
+                }
+              }
+              if (ports.length > 0) {
+                resolve(ports);
+                return;
+              }
+            } catch (e) {
+              // fallback to registry
+            }
+          }
+
+          // Fallback to Windows Registry query for SERIALCOMM
+          exec('reg query HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM', (regErr, regStdout) => {
+            if (regErr || !regStdout) {
+              resolve([]);
+              return;
+            }
+            const lines = regStdout.split('\n');
+            const regPorts = [];
+            for (const line of lines) {
+              const match = line.match(/REG_SZ\s+(COM\d+)/i);
+              if (match && match[1]) {
+                const comPort = match[1].toUpperCase();
+                regPorts.push({
+                  port: comPort,
+                  name: `${comPort} — Windows Serial Port`,
+                  label: `${comPort} — Serial Device`,
+                  deviceId: ''
+                });
+              }
+            }
+            resolve(regPorts);
+          });
+        });
+      }).catch(() => resolve([]));
+    });
+  });
+
   // Remove menu bar for clean app look, but keep F12 DevTools shortcut
   mainWindow.setMenuBarVisibility(false);
 
-  // Enable Web Serial API permission & auto-select serial port in Electron
+  // Enable Web Serial API permission & auto-select matching target COM port in Electron
   mainWindow.webContents.session.on('select-serial-port', (event, portList, webContents, callback) => {
     event.preventDefault();
     if (portList && portList.length > 0) {
-      // Automatically connect to the first available COM / Serial port (e.g. ESP32-S3)
+      if (targetSelectedPortName) {
+        const targetClean = targetSelectedPortName.toUpperCase();
+        // Match by portName ('COM8') or displayName ('USB-Enhanced-SERIAL CH34S (COM8)')
+        const match = portList.find(p => {
+          const pName = (p.portName || '').toUpperCase();
+          const pDisplay = (p.displayName || '').toUpperCase();
+          return pName === targetClean || pDisplay.includes(`(${targetClean})`) || pDisplay.includes(targetClean);
+        });
+        if (match) {
+          callback(match.portId);
+          return;
+        }
+      }
+      // If no specific match, use first available port
       callback(portList[0].portId);
     } else {
       callback('');

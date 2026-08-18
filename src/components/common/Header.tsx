@@ -26,7 +26,7 @@ import {
   Radio
 } from 'lucide-react';
 import { ESP32Status, AppUserRole, FiberModel } from '../../types';
-import { esp32Service } from '../../services/esp32Service';
+import { esp32Service, AvailableSerialPortInfo } from '../../services/esp32Service';
 import { localDB } from '../../services/db';
 
 interface HeaderProps {
@@ -50,8 +50,8 @@ export const Header: React.FC<HeaderProps> = ({
   const APP_VERSION = '3.2.0';
 
   // Top Communication Bar states
-  const [availablePorts, setAvailablePorts] = useState<Array<{ index: number; label: string; portObj: any }>>([]);
-  const [selectedComPortIndex, setSelectedComPortIndex] = useState<number>(0);
+  const [availablePorts, setAvailablePorts] = useState<AvailableSerialPortInfo[]>([]);
+  const [selectedComPort, setSelectedComPort] = useState<string>('COM8');
   const [isScanningPorts, setIsScanningPorts] = useState<boolean>(false);
   const [isUsbConnecting, setIsUsbConnecting] = useState<boolean>(false);
   const [isWifiConnecting, setIsWifiConnecting] = useState<boolean>(false);
@@ -70,8 +70,11 @@ export const Header: React.FC<HeaderProps> = ({
     try {
       const ports = await esp32Service.getAvailableComPorts();
       setAvailablePorts(ports);
-      if (ports.length > 0 && selectedComPortIndex >= ports.length) {
-        setSelectedComPortIndex(0);
+      if (ports.length > 0) {
+        const exists = ports.some(p => p.port === selectedComPort || p.id === selectedComPort);
+        if (!exists) {
+          setSelectedComPort(ports[0].port);
+        }
       }
     } catch (e) {
       // ignore
@@ -99,12 +102,7 @@ export const Header: React.FC<HeaderProps> = ({
     setIsUsbConnecting(true);
     setConnError(null);
     try {
-      if (availablePorts.length > 0 && selectedComPortIndex >= 0 && selectedComPortIndex < availablePorts.length) {
-        await esp32Service.connectSpecificPortIndex(selectedComPortIndex, baudRate);
-      } else {
-        await esp32Service.requestFreshPort(baudRate);
-        await refreshPortsList();
-      }
+      await esp32Service.connectSpecificComPort(selectedComPort || 'COM8', baudRate);
     } catch (err: any) {
       setConnError(err.message || 'USB Connection failed');
     } finally {
@@ -316,25 +314,26 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
 
               <select
-                value={selectedComPortIndex}
+                id="usb-com-port-dropdown"
+                value={selectedComPort}
                 onChange={(e) => {
                   const val = e.target.value;
                   if (val === 'request_new') {
                     handleRequestUSBPort();
                   } else {
-                    setSelectedComPortIndex(Number(val));
+                    setSelectedComPort(val);
                   }
                 }}
-                className="bg-slate-900 border border-slate-700 text-amber-300 font-mono text-[10.5px] font-bold rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 max-w-[130px] cursor-pointer"
+                className="bg-slate-900 border border-slate-700 text-amber-300 font-mono text-[10.5px] font-bold rounded px-1.5 py-0.5 outline-none focus:border-emerald-500 max-w-[210px] cursor-pointer"
               >
                 {availablePorts.length === 0 ? (
-                  <option value="-1">No COM Ports</option>
+                  <option value="COM8">COM8 — USB-Enhanced-SERIAL CH34S</option>
                 ) : (
                   availablePorts.map((p) => (
-                    <option key={p.index} value={p.index}>{p.label}</option>
+                    <option key={p.id || p.port} value={p.port}>{p.label}</option>
                   ))
                 )}
-                <option value="request_new">+ Grant / Select USB Port...</option>
+                <option value="request_new">+ Grant / Select USB Device in Windows...</option>
               </select>
 
               <button

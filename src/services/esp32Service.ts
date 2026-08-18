@@ -54,6 +54,15 @@ export type CaptureEvent =
   | { type: 'MEASUREMENT_RESULT'; payload: MeasurementResultPayload }
   | { type: 'CAPTURE_COMPLETE'; captureId?: string };
 
+export interface AvailableSerialPortInfo {
+  id: string; // e.g. 'COM8' or 'PORT_0'
+  port: string; // e.g. 'COM8'
+  label: string; // e.g. 'COM8 — USB-Enhanced-SERIAL CH34S'
+  name: string; // e.g. 'USB-Enhanced-SERIAL CH34S (COM8)'
+  portObj?: any; // Web Serial port instance if granted
+  isDeviceManagerDetected?: boolean;
+}
+
 class ESP32CommunicationService {
   private status: ESP32Status = {
     connected: false,
@@ -226,7 +235,7 @@ class ESP32CommunicationService {
 
     this.userInitiatedDisconnect = false;
     this.status.isSearching = true;
-    this.status.searchStatusText = 'Scanning COM Ports...';
+    this.status.searchStatusText = 'Scanning Windows COM Ports...';
     this.status.connectionError = undefined;
     this.notifyStatus();
 
@@ -242,9 +251,11 @@ class ESP32CommunicationService {
     }
 
     try {
-      const ports = await (navigator as any).serial.getPorts();
-      if (!ports || ports.length === 0) {
-        this.logConnection('ℹ️ Auto-detect: No granted USB Serial ports found.');
+      const availablePorts = await this.getAvailableComPorts();
+      const candidatePortsWithObj = availablePorts.filter(p => !!p.portObj);
+
+      if (candidatePortsWithObj.length === 0) {
+        this.logConnection('ℹ️ Auto-detect: No active granted USB Serial ports found. Please select COM port and click CONNECT.');
         this.status.isSearching = false;
         this.status.connected = false;
         this.status.connectionError = 'ESP32 NOT CONNECTED';
@@ -252,26 +263,12 @@ class ESP32CommunicationService {
         return false;
       }
 
-      // Sort candidate ports favoring known ESP32 / USB Serial VIDs (0x303a, 0x10c4, 0x1a86, 0x0403)
-      const knownVids = [0x303a, 0x10c4, 0x1a86, 0x0403];
-      const sortedPorts = [...ports].sort((a, b) => {
-        const infoA = a.getInfo?.() || {};
-        const infoB = b.getInfo?.() || {};
-        const aKnown = infoA.usbVendorId ? knownVids.includes(infoA.usbVendorId) : false;
-        const bKnown = infoB.usbVendorId ? knownVids.includes(infoB.usbVendorId) : false;
-        if (aKnown && !bKnown) return -1;
-        if (!aKnown && bKnown) return 1;
-        return 0;
-      });
+      for (let i = 0; i < candidatePortsWithObj.length; i++) {
+        const candidate = candidatePortsWithObj[i];
+        const candidatePort = candidate.portObj;
+        const portNameLabel = candidate.label || candidate.port;
 
-      for (let i = 0; i < sortedPorts.length; i++) {
-        const candidatePort = sortedPorts[i];
-        const info = candidatePort.getInfo?.() || {};
-        const portNameLabel = info.usbVendorId 
-          ? `USB Serial (VID:0x${info.usbVendorId.toString(16).toUpperCase()}${info.usbProductId ? `:0x${info.usbProductId.toString(16).toUpperCase()}` : ''})`
-          : `COM Port ${i + 1}`;
-
-        this.logConnection(`🔌 Auto-Detect testing candidate port ${i + 1}/${sortedPorts.length}: ${portNameLabel}...`);
+        this.logConnection(`🔌 Auto-Detect testing candidate port ${i + 1}/${candidatePortsWithObj.length}: ${portNameLabel}...`);
         this.status.searchStatusText = `Testing ${portNameLabel}...`;
         this.notifyStatus();
 
@@ -314,7 +311,7 @@ class ESP32CommunicationService {
       this.status.connected = false;
       this.status.connectionError = 'ESP32 NOT CONNECTED';
       this.notifyStatus();
-      this.logConnection('🔴 Auto-detect finished: No valid ESP32-S3 hardware verified.');
+      this.logConnection('🔴 Auto-detect finished: No valid ESP32 hardware verified.');
       return false;
     } catch (err: any) {
       this.status.isSearching = false;
@@ -598,29 +595,48 @@ class ESP32CommunicationService {
     this.wifiIpAddress = ipAddress;
     this.wifiHttpPort = port;
     const httpUrl = `http://${ipAddress}:${port}/data`;
+    const statusUrl = `http://${ipAddress}:${port}/status`;
     this.updateTransportState('WIFI', 'CONNECTING', `${ipAddress}:${port}`);
-    this.logConnection(`🌐 Connecting to ESP32 Wi-Fi HTTP Live Stream at ${httpUrl}...`);
+    this.logConnection(`🌐 Connecting to ESP32 Wi-Fi HTTP Live Stream at http://${ipAddress}:${port}...`);
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
       
+      let verifiedResponse = false;
+      let initialText = '';
+
       try {
         const res = await fetch(httpUrl, { signal: controller.signal, mode: 'cors' });
-        clearTimeout(timeoutId);
         if (res.ok) {
-          const initialText = await res.text();
-          if (initialText && initialText.trim()) {
-            this.parseAndEmitHardwareLine(initialText.trim());
-          }
+          initialText = await res.text();
+          verifiedResponse = true;
         }
       } catch (fetchErr) {
+        // Try fallback to /status
+        try {
+          const res2 = await fetch(statusUrl, { signal: controller.signal, mode: 'cors' });
+          if (res2.ok) {
+            initialText = await res2.text();
+            verifiedResponse = true;
+          }
+        } catch (e2) {}
+      } finally {
         clearTimeout(timeoutId);
-        this.logConnection(`ℹ️ HTTP Ping sent to ${httpUrl}. Initializing HTTP Stream...`);
+      }
+
+      if (!verifiedResponse) {
+        this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, 'ESP32 Wi-Fi HTTP Unreachable');
+        this.logConnection(`❌ Wi-Fi Connection Failed: No response from ESP32 at http://${ipAddress}:${port}`);
+        throw new Error(`Failed to connect to ESP32 Wi-Fi HTTP Stream at ${ipAddress}:${port}`);
+      }
+
+      if (initialText && initialText.trim()) {
+        this.parseAndEmitHardwareLine(initialText.trim());
       }
 
       this.updateTransportState('WIFI', 'VERIFIED CONNECTED', `${ipAddress}:${port}`);
-      this.logConnection(`✅ ESP32 Wi-Fi HTTP Stream Active at ${ipAddress}:${port}`);
+      this.logConnection(`✅ ESP32 Wi-Fi HTTP Stream Verified and Active at ${ipAddress}:${port}`);
 
       this.httpPollingInterval = setInterval(async () => {
         if (this.status.wifiStatus.state !== 'VERIFIED CONNECTED') return;
@@ -641,8 +657,8 @@ class ESP32CommunicationService {
       return true;
     } catch (err: any) {
       this.updateTransportState('WIFI', 'CONNECTION FAILED', `${ipAddress}:${port}`, undefined, err.message);
-      this.logConnection(`❌ HTTP Stream Error at ${httpUrl}: ${err.message || err}`);
-      throw new Error(`Failed to connect to ESP32 Wi-Fi HTTP Stream at ${ipAddress}:${port}`);
+      this.logConnection(`❌ HTTP Stream Error at ${ipAddress}:${port}: ${err.message || err}`);
+      throw err;
     }
   }
 
@@ -1110,67 +1126,185 @@ class ESP32CommunicationService {
     this.logConnection('📡 Wi-Fi transport disconnected.');
   }
 
-  public async getAvailableComPorts(): Promise<Array<{ index: number; label: string; portObj: any }>> {
-    if (!('serial' in navigator)) return [];
-    try {
-      const ports = await (navigator as any).serial.getPorts();
-      if (!ports) return [];
-      return ports.map((p: any, idx: number) => {
-        const info = p.getInfo?.() || {};
-        let label = `COM Port ${idx + 1}`;
-        if (info.usbVendorId) {
-          const vidHex = info.usbVendorId.toString(16).toUpperCase();
-          const pidHex = info.usbProductId ? `:0x${info.usbProductId.toString(16).toUpperCase()}` : '';
-          label = `USB-Serial (VID 0x${vidHex}${pidHex})`;
+  public async getAvailableComPorts(): Promise<AvailableSerialPortInfo[]> {
+    const results: AvailableSerialPortInfo[] = [];
+    const seenPorts = new Set<string>();
+
+    // 1. Check if running in Electron: Query actual Windows Device Manager COM Ports via IPC
+    if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+      try {
+        const nativePorts = await (window as any).ipcRenderer.invoke('get-serial-ports');
+        if (Array.isArray(nativePorts) && nativePorts.length > 0) {
+          for (const np of nativePorts) {
+            if (!np || !np.port) continue;
+            const comName = String(np.port).toUpperCase().trim();
+            if (!seenPorts.has(comName)) {
+              seenPorts.add(comName);
+              results.push({
+                id: comName,
+                port: comName,
+                label: np.label || `${comName} — ${np.name || 'Serial Device'}`,
+                name: np.name || comName,
+                isDeviceManagerDetected: true
+              });
+            }
+          }
         }
-        return { index: idx, label, portObj: p };
-      });
-    } catch (e) {
-      return [];
+      } catch (err) {
+        // Continue to Web Serial fallback
+      }
     }
+
+    // 2. Query Web Serial API for already granted ports
+    if (typeof window !== 'undefined' && 'serial' in navigator) {
+      try {
+        const webPorts = await (navigator as any).serial.getPorts();
+        if (Array.isArray(webPorts) && webPorts.length > 0) {
+          webPorts.forEach((p: any, idx: number) => {
+            const info = p.getInfo?.() || {};
+            let desc = 'USB-Serial Device';
+
+            if (info.usbVendorId) {
+              const vidHex = info.usbVendorId.toString(16).toUpperCase();
+              const pidHex = info.usbProductId ? `:0x${info.usbProductId.toString(16).toUpperCase()}` : '';
+              
+              if (info.usbVendorId === 0x1A86 || info.usbVendorId === 0x1a86) {
+                desc = 'USB-Enhanced-SERIAL CH34x/CH343/CH34S';
+              } else if (info.usbVendorId === 0x303A || info.usbVendorId === 0x303a) {
+                desc = 'Espressif ESP32-S3 USB Serial';
+              } else if (info.usbVendorId === 0x10C4 || info.usbVendorId === 0x10c4) {
+                desc = 'Silicon Labs CP210x';
+              } else if (info.usbVendorId === 0x0403) {
+                desc = 'FTDI USB Serial';
+              } else {
+                desc = `USB Serial (VID 0x${vidHex}${pidHex})`;
+              }
+            }
+
+            // If we already have a Device Manager detected port that doesn't have portObj attached yet, attach it
+            const matchedDm = results.find(r => !r.portObj);
+            if (matchedDm) {
+              matchedDm.portObj = p;
+            } else {
+              const portTag = `USB-Port-${idx + 1}`;
+              const label = `${portTag} — ${desc}`;
+              if (!seenPorts.has(portTag)) {
+                seenPorts.add(portTag);
+                results.push({
+                  id: portTag,
+                  port: portTag,
+                  label,
+                  name: desc,
+                  portObj: p
+                });
+              }
+            }
+          });
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 3. Ensure COM8 and standard COM ports (COM1..COM16) are present so the operator can always select COM8 directly
+    const defaultPorts = ['COM8', 'COM3', 'COM4', 'COM5', 'COM1', 'COM2', 'COM6', 'COM7', 'COM9', 'COM10', 'COM11', 'COM12'];
+    for (const dp of defaultPorts) {
+      if (!seenPorts.has(dp)) {
+        seenPorts.add(dp);
+        const label = dp === 'COM8' ? 'COM8 — USB-Enhanced-SERIAL CH34S' : `${dp} — Serial Device`;
+        results.push({
+          id: dp,
+          port: dp,
+          label,
+          name: label
+        });
+      }
+    }
+
+    // Sort to prioritize Device Manager detected ports and COM8 at the top
+    results.sort((a, b) => {
+      if (a.isDeviceManagerDetected && !b.isDeviceManagerDetected) return -1;
+      if (!a.isDeviceManagerDetected && b.isDeviceManagerDetected) return 1;
+      if (a.port === 'COM8') return -1;
+      if (b.port === 'COM8') return 1;
+      return a.port.localeCompare(b.port, undefined, { numeric: true });
+    });
+
+    return results;
   }
 
-  public async connectSpecificPortIndex(portIndex: number, baudRate: number = 115200): Promise<boolean> {
+  public async connectSpecificComPort(portIdOrName: string, baudRate: number = 115200): Promise<boolean> {
     const portsList = await this.getAvailableComPorts();
-    if (portIndex < 0 || portIndex >= portsList.length) {
-      return await this.requestFreshPort(baudRate);
-    }
+    const cleanTarget = (portIdOrName || 'COM8').toUpperCase().trim();
+    
+    const matched = portsList.find(p => 
+      p.id.toUpperCase() === cleanTarget || 
+      p.port.toUpperCase() === cleanTarget ||
+      p.label.toUpperCase().includes(cleanTarget)
+    ) || portsList[0];
 
-    const selectedPortInfo = portsList[portIndex];
-    const candidatePort = selectedPortInfo.portObj;
-    const portNameLabel = selectedPortInfo.label;
+    const targetPortName = matched?.port || cleanTarget;
+    const targetLabel = matched?.label || `${targetPortName} — USB-Enhanced-SERIAL CH34S`;
 
-    this.updateTransportState('USB', 'CONNECTING', portNameLabel);
+    this.updateTransportState('USB', 'CONNECTING', targetLabel);
     this.userInitiatedDisconnect = false;
 
     await this.disconnectUSB(false);
 
+    // If running in Electron, inform main process of target port before requesting
+    if (typeof window !== 'undefined' && (window as any).ipcRenderer) {
+      try {
+        await (window as any).ipcRenderer.invoke('set-target-serial-port', targetPortName);
+      } catch (e) {}
+    }
+
+    if (!('serial' in navigator)) {
+      this.updateTransportState('USB', 'CONNECTION FAILED', targetLabel, undefined, 'Web Serial not supported');
+      this.logConnection('❌ Web Serial API is not supported in this browser. Please use Chrome, Edge, or the Desktop App.');
+      throw new Error('Web Serial API is not supported in this environment.');
+    }
+
     try {
-      this.logConnection(`🔌 Opening ${portNameLabel} at ${baudRate} baud...`);
+      let candidatePort = matched?.portObj;
+
+      if (!candidatePort) {
+        // If not already granted, request port from OS/browser
+        this.logConnection(`🔌 Requesting port ${targetLabel} at ${baudRate} baud...`);
+        candidatePort = await (navigator as any).serial.requestPort();
+      }
+
+      this.logConnection(`🔌 Opening ${targetLabel} at ${baudRate} baud...`);
       const openPromise = candidatePort.open({ baudRate });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Port open timeout. Port may be locked by another application.')), 3500)
+        setTimeout(() => reject(new Error(`COM Port ${targetPortName} open timeout. Port may be locked by another application.`)), 3500)
       );
       await Promise.race([openPromise, timeoutPromise]);
 
       this.serialPort = candidatePort;
       this.status.baudRate = baudRate;
-      this.status.portName = portNameLabel;
+      this.status.portName = targetLabel;
 
       this.startSerialReader(candidatePort);
 
-      const verified = await this.performHardwareHandshake('USB Serial', portNameLabel);
+      // Perform Handshake: HELLO? -> HELLO_ACK
+      const verified = await this.performHardwareHandshake('USB Serial', targetLabel);
       if (verified) {
         return true;
       } else {
-        this.updateTransportState('USB', 'CONNECTION FAILED', portNameLabel, undefined, 'Handshake Timeout');
+        this.updateTransportState('USB', 'CONNECTION FAILED', targetLabel, undefined, 'Handshake Timeout');
         return false;
       }
     } catch (err: any) {
-      this.updateTransportState('USB', 'CONNECTION FAILED', portNameLabel, undefined, err.message || 'Connection Error');
-      this.logConnection(`❌ Failed to connect to ${portNameLabel}: ${err.message || err}`);
+      this.updateTransportState('USB', 'CONNECTION FAILED', targetLabel, undefined, err.message || 'Connection Error');
+      this.logConnection(`❌ Failed to connect to ${targetLabel}: ${err.message || err}`);
       throw err;
     }
+  }
+
+  public async connectSpecificPortIndex(portIndex: number, baudRate: number = 115200): Promise<boolean> {
+    const ports = await this.getAvailableComPorts();
+    const item = ports[portIndex] || ports[0];
+    return await this.connectSpecificComPort(item ? item.id : 'COM8', baudRate);
   }
 
   public async disconnectHardware(internalCleanup: boolean = false, manual: boolean = false): Promise<void> {
