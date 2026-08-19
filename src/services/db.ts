@@ -130,18 +130,49 @@ class LocalDBService {
     if (this.isInitialized) return;
 
     try {
-      // Load sql.js WASM locally or via reliable CDN fallbacks
+      // Load sql.js WASM locally or via reliable CDN fallbacks using wasmBinary to prevent streaming compile errors
       try {
-        this.SQL = await initSqlJs({
-          locateFile: (file) => {
-            if (file.endsWith('.wasm') && sqlWasmUrl) {
-              return sqlWasmUrl;
+        let wasmBinary: ArrayBuffer | null = null;
+
+        // 1. Attempt to fetch bundled local wasm binary as ArrayBuffer
+        if (sqlWasmUrl) {
+          try {
+            const resp = await fetch(sqlWasmUrl);
+            if (resp.ok) {
+              wasmBinary = await resp.arrayBuffer();
             }
-            return `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`;
+          } catch (fetchErr) {
+            // Fetch failed, will try CDN
           }
-        });
+        }
+
+        // 2. If local fetch failed, try CDN ArrayBuffer fetch
+        if (!wasmBinary) {
+          try {
+            const cdnResp = await fetch('https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm');
+            if (cdnResp.ok) {
+              wasmBinary = await cdnResp.arrayBuffer();
+            }
+          } catch (cdnFetchErr) {
+            // CDN fetch failed
+          }
+        }
+
+        if (wasmBinary) {
+          this.SQL = await initSqlJs({ wasmBinary });
+        } else {
+          // Fallback to locateFile if direct ArrayBuffer fetch wasn't possible
+          this.SQL = await initSqlJs({
+            locateFile: (file) => {
+              if (file.endsWith('.wasm') && sqlWasmUrl) {
+                return sqlWasmUrl;
+              }
+              return `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`;
+            }
+          });
+        }
       } catch (wasmErr) {
-        console.warn('Local WASM URL init failed, trying cdnjs CDN fallback:', wasmErr);
+        console.warn('Primary WASM init failed, trying CDN fallback:', wasmErr);
         try {
           this.SQL = await initSqlJs({
             locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
