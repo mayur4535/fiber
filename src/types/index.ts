@@ -236,6 +236,7 @@ export interface SystemLog {
 export interface PendingTestSession {
   id: string;
   serialNumber: string;
+  partyName?: string;
   modelId: string;
   brand: LaserBrand;
   modelName: string;

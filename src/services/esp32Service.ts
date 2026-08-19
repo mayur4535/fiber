@@ -172,7 +172,6 @@ class ESP32CommunicationService {
     if (!this.status.connected && this.isLiveStreaming) {
       this.isLiveStreaming = false;
       this.liveStreamStatus = 'CONNECTION_LOST';
-      this.stopLiveStreamSimulator();
       this.notifyLiveState();
       this.logConnection('⚠️ Live Oscilloscope Stream Connection Lost due to transport disconnection.');
     }
@@ -774,23 +773,29 @@ class ESP32CommunicationService {
   // --- LIVE OSCILLOSCOPE CONTROL API ---
 
   public async startLiveStream(): Promise<void> {
+    if (!this.status.connected || !this.isRealHardwareConnected) {
+      this.isLiveStreaming = false;
+      this.liveStreamStatus = 'CONNECTION_LOST';
+      this.notifyLiveState();
+      this.logConnection('⚠️ Cannot start Live Oscilloscope: ESP32 is not connected.');
+      throw new Error('ESP32 NOT CONNECTED. Please connect ESP32 first.');
+    }
+
     this.isLiveStreaming = true;
     this.liveStreamStatus = 'LIVE';
     this.notifyLiveState();
-    this.logConnection('▶️ Command Sent: LIVE_START');
+    this.logConnection('▶️ Command Sent to ESP32: LIVE_START');
     await this.writeToHardware('LIVE_START');
-
-    // If hardware is not connected or in test mode, start simulation fallback generator
-    this.startLiveStreamSimulator();
   }
 
   public async stopLiveStream(): Promise<void> {
     this.isLiveStreaming = false;
     this.liveStreamStatus = 'STOPPED';
-    this.stopLiveStreamSimulator();
     this.notifyLiveState();
-    this.logConnection('⏹️ Command Sent: LIVE_STOP');
-    await this.writeToHardware('LIVE_STOP');
+    this.logConnection('⏹️ Command Sent to ESP32: LIVE_STOP');
+    if (this.status.connected && this.isRealHardwareConnected) {
+      await this.writeToHardware('LIVE_STOP');
+    }
   }
 
   public getIsLiveStreaming(): boolean {
@@ -815,38 +820,6 @@ class ESP32CommunicationService {
   private notifyLiveState(): void {
     const state = { isLive: this.isLiveStreaming, statusText: this.liveStreamStatus };
     this.liveStateListeners.forEach(fn => fn(state));
-  }
-
-  private startLiveStreamSimulator(): void {
-    this.stopLiveStreamSimulator();
-
-    // High-frequency live stream generator emitting 5 samples every 100ms
-    this.liveSimulatorInterval = setInterval(() => {
-      if (!this.isLiveStreaming) return;
-
-      const nowSec = Date.now() / 1000;
-      const generated: number[] = [];
-      const samplesCount = 5;
-
-      for (let i = 0; i < samplesCount; i++) {
-        const t = nowSec + (i * 0.02);
-        const baseIntensity = 2.35;
-        const sineMod = Math.sin(t * 2.5) * 0.42;
-        const fastNoise = (Math.random() - 0.5) * 0.10;
-        const spike = (Math.random() > 0.95) ? (Math.random() * 0.7) : 0;
-        const sampleVal = Math.max(0, Number((baseIntensity + sineMod + fastNoise + spike).toFixed(2)));
-        generated.push(sampleVal);
-      }
-
-      this.parseAndEmitHardwareLine(`LIVE_DATA:[${generated.join(',')}]`);
-    }, 100);
-  }
-
-  private stopLiveStreamSimulator(): void {
-    if (this.liveSimulatorInterval) {
-      clearInterval(this.liveSimulatorInterval);
-      this.liveSimulatorInterval = null;
-    }
   }
 
   // --- PARSE INCOMING SENSOR READINGS FROM PHYSICAL HARDWARE ---
@@ -1273,12 +1246,12 @@ class ESP32CommunicationService {
       }
     }
 
-    // 3. Ensure COM8 and standard COM ports (COM1..COM16) are present so the operator can always select COM8 directly
-    const defaultPorts = ['COM8', 'COM3', 'COM4', 'COM5', 'COM1', 'COM2', 'COM6', 'COM7', 'COM9', 'COM10', 'COM11', 'COM12'];
+    // 3. Ensure all standard COM ports (COM1..COM20) are present so the operator can select any COM port directly on PC
+    const defaultPorts = ['COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'COM10', 'COM11', 'COM12', 'COM13', 'COM14', 'COM15', 'COM16', 'COM17', 'COM18', 'COM19', 'COM20'];
     for (const dp of defaultPorts) {
       if (!seenPorts.has(dp)) {
         seenPorts.add(dp);
-        const label = dp === 'COM8' ? 'COM8 — USB-Enhanced-SERIAL CH34S' : `${dp} — Serial Device`;
+        const label = `${dp} — USB Serial Port`;
         results.push({
           id: dp,
           port: dp,
@@ -1288,12 +1261,12 @@ class ESP32CommunicationService {
       }
     }
 
-    // Sort to prioritize Device Manager detected ports and COM8 at the top
+    // Sort: Granted / Detected ports first, then alphanumeric COM port order
     results.sort((a, b) => {
+      if (a.portObj && !b.portObj) return -1;
+      if (!a.portObj && b.portObj) return 1;
       if (a.isDeviceManagerDetected && !b.isDeviceManagerDetected) return -1;
       if (!a.isDeviceManagerDetected && b.isDeviceManagerDetected) return 1;
-      if (a.port === 'COM8') return -1;
-      if (b.port === 'COM8') return 1;
       return a.port.localeCompare(b.port, undefined, { numeric: true });
     });
 

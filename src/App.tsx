@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/common/Header';
 import { NavigationDrawer, ActiveModule } from './components/common/NavigationDrawer';
 import { DashboardModule } from './components/dashboard/DashboardModule';
+import { LiveIntensityModule } from './components/liveintensity/LiveIntensityModule';
 import { ModelManagerModule } from './components/models/ModelManagerModule';
 import { ReferenceReadingModule } from './components/reference/ReferenceReadingModule';
 import { LiveTestModule } from './components/livetest/LiveTestModule';
@@ -126,7 +127,7 @@ export default function App() {
         />
 
         {/* Content Region */}
-        <main className={`flex-1 bg-[#111827] ${activeModule === 'livetest' ? 'p-1 overflow-hidden h-full' : 'p-2 md:p-3 overflow-y-auto'}`}>
+        <main className={`flex-1 bg-[#111827] ${activeModule === 'livetest' || activeModule === 'liveintensity' ? 'p-1 overflow-hidden h-full' : 'p-2 md:p-3 overflow-y-auto'}`}>
           {activeModule === 'dashboard' && (
             <DashboardModule
               models={models}
@@ -138,7 +139,11 @@ export default function App() {
             />
           )}
 
-
+          {activeModule === 'liveintensity' && (
+            <LiveIntensityModule
+              onNavigateToTest={() => setActiveModule('livetest')}
+            />
+          )}
 
           {activeModule === 'livetest' && (
             <LiveTestModule

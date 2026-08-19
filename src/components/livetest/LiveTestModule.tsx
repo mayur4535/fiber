@@ -35,7 +35,8 @@ import {
   CheckCircle2,
   XCircle,
   Info,
-  RefreshCw
+  RefreshCw,
+  Usb
 } from 'lucide-react';
 import { 
   FiberModel, 
@@ -50,7 +51,6 @@ import { compareReadings, diagnoseFaults, evaluateOpticalStepDiagnosis, parseSte
 import { localDB } from '../../services/db';
 import { ConfirmModal, PromptModal } from '../common/ModalDialogs';
 import { OscilloscopeModal } from '../common/OscilloscopeModal';
-import { LiveOscilloscope } from './LiveOscilloscope';
 
 interface LiveTestModuleProps {
   activeModel: FiberModel;
@@ -209,6 +209,19 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const [showEditRefModal, setShowEditRefModal] = useState<boolean>(false);
   const [showEditLiveModal, setShowEditLiveModal] = useState<boolean>(false);
   const [showOscilloscopeModal, setShowOscilloscopeModal] = useState<boolean>(false);
+  const [espNotConnectedAlert, setEspNotConnectedAlert] = useState<{
+    isOpen: boolean;
+    feature: 'CAPTURE' | 'OSCILLOSCOPE' | 'RETEST';
+  }>({ isOpen: false, feature: 'CAPTURE' });
+
+  const handleOpenOscilloscope = () => {
+    const currentEspStatus = esp32Service.getStatus();
+    if (!currentEspStatus.connected || !esp32Service.getIsRealHardwareConnected()) {
+      setEspNotConnectedAlert({ isOpen: true, feature: 'OSCILLOSCOPE' });
+      return;
+    }
+    setShowOscilloscopeModal(true);
+  };
 
   // Real Hardware Connection States (USB COM Port & Wi-Fi)
   const [internalShowHardwareModal, setInternalShowHardwareModal] = useState<boolean>(false);
@@ -763,7 +776,12 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
   // Serial Number state for Faulty Pulse Source under test
   const [serialNumber, setSerialNumber] = useState<string>(() => {
-    return `SN-${activeModel.brand.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    return localStorage.getItem('fsdp_last_serial_number') || `SN-${activeModel.brand.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  });
+
+  // Party Name state for Customer / Client under test
+  const [partyName, setPartyName] = useState<string>(() => {
+    return localStorage.getItem('fsdp_last_party_name') || 'M/S Shreenathji Lasers';
   });
 
   // Pending test recovery session
@@ -775,6 +793,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     if (pending && (Object.keys(pending.jointStatuses || {}).length > 0 || pending.serialNumber)) {
       setPendingTestBanner(pending);
       if (pending.serialNumber) setSerialNumber(pending.serialNumber);
+      if (pending.partyName) setPartyName(pending.partyName);
       if (pending.activeCycleId) setActiveCycleId(pending.activeCycleId);
       if (pending.activeStepId) setActiveStepId(pending.activeStepId);
       if (pending.selectedJoint) setSelectedJoint(pending.selectedJoint);
@@ -801,6 +820,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       const session: PendingTestSession = {
         id: `pending-${activeModel.id}`,
         serialNumber,
+        partyName,
         modelId: activeModel.id,
         brand: activeModel.brand,
         modelName: activeModel.modelName,
@@ -816,7 +836,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       };
       localDB.savePendingTest(session);
     }
-  }, [serialNumber, jointStatuses, capturedParams, activeCycleId, activeStepId, selectedJoint, activeFault, cycles, activeModel]);
+  }, [serialNumber, partyName, jointStatuses, capturedParams, activeCycleId, activeStepId, selectedJoint, activeFault, cycles, activeModel]);
 
   // Subscribe to Physical ESP32 Hardware Switches (GPIO5 Capture & GPIO6 Next)
   useEffect(() => {
@@ -834,6 +854,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
   const handleResumePendingTest = () => {
     if (!pendingTestBanner) return;
     if (pendingTestBanner.serialNumber) setSerialNumber(pendingTestBanner.serialNumber);
+    if (pendingTestBanner.partyName) setPartyName(pendingTestBanner.partyName);
     if (pendingTestBanner.activeCycleId) setActiveCycleId(pendingTestBanner.activeCycleId);
     if (pendingTestBanner.activeStepId) setActiveStepId(pendingTestBanner.activeStepId);
     if (pendingTestBanner.selectedJoint) setSelectedJoint(pendingTestBanner.selectedJoint);
@@ -1060,7 +1081,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
     // MANDATORY HARDWARE CHECK: No capture without real connected & verified ESP32
     const currentEspStatus = esp32Service.getStatus();
     if (!currentEspStatus.connected || !esp32Service.getIsRealHardwareConnected()) {
-      alert("❌ ESP32 NOT CONNECTED\n\nCannot perform capture because no physical ESP32-S3 hardware is connected and verified.\n\nPlease connect real hardware via USB COM Port or Wi-Fi before capturing.");
+      setEspNotConnectedAlert({ isOpen: true, feature: 'CAPTURE' });
       return;
     }
 
@@ -1231,7 +1252,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
       id: `FSDP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
       testId: `test-${Date.now()}`,
       timestamp: new Date().toISOString(),
-      customerName: 'Factory Operations (Unit A)',
+      customerName: partyName || 'M/S Shreenathji Lasers',
       machineId: 'MAC-8891-XL',
       machineName: 'High Precision Fiber Laser Workstation',
       engineerName: 'Rajesh Patel (Lead Service Eng.)',
@@ -1291,23 +1312,35 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
         <div className="flex items-center gap-1.5 flex-wrap">
           {/* Faulty Pulse Source Serial Number Input */}
-          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 px-1.5 py-0.5 rounded text-[10px]">
-            <span className="text-cyan-400 font-bold hidden xs:inline">S/N:</span>
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded text-[10px]">
+            <span className="text-cyan-400 font-bold">S/N:</span>
             <input
               type="text"
               value={serialNumber}
-              onChange={(e) => setSerialNumber(e.target.value)}
-              placeholder="Pulse Source Serial No"
+              onChange={(e) => {
+                setSerialNumber(e.target.value);
+                localStorage.setItem('fsdp_last_serial_number', e.target.value);
+              }}
+              placeholder="Pulse Source S/N"
               title="Serial Number of Faulty Pulse Source Under Test"
               className="bg-slate-800 text-emerald-300 font-mono font-bold border border-slate-700 rounded px-1.5 py-0.5 outline-none text-[10px] w-28 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
             />
-            <button
-              onClick={() => setSerialNumber(`SN-${activeModel.brand.toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`)}
-              className="text-slate-400 hover:text-cyan-300 p-0.5"
-              title="Generate New Serial Number"
-            >
-              <RefreshCw className="w-2.5 h-2.5" />
-            </button>
+          </div>
+
+          {/* Party Name Input */}
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded text-[10px]">
+            <span className="text-amber-400 font-bold">Party Name:</span>
+            <input
+              type="text"
+              value={partyName}
+              onChange={(e) => {
+                setPartyName(e.target.value);
+                localStorage.setItem('fsdp_last_party_name', e.target.value);
+              }}
+              placeholder="Party / Client Name"
+              title="Party / Client Name (પાર્ટીનું નામ)"
+              className="bg-slate-800 text-amber-200 font-mono font-bold border border-slate-700 rounded px-1.5 py-0.5 outline-none text-[10px] w-36 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+            />
           </div>
 
           {/* Active Model Selector */}
@@ -1570,9 +1603,6 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
         <div className="lg:col-span-8 bg-[#0B132B] border border-slate-800 rounded-lg p-2 flex flex-col justify-between shadow-xl overflow-y-auto h-full space-y-2 min-h-0">
           <div className="space-y-2 flex-1 flex flex-col min-h-0">
             
-            {/* LIVE OSCILLOSCOPE REAL-TIME INTENSITY MONITOR */}
-            <LiveOscilloscope espStatus={espStatus} />
-
             {/* COMPACT HORIZONTAL JOINT HEADER BANNER */}
             <div className="bg-[#0d1836] border border-slate-800 px-2.5 py-1 rounded-lg shadow-inner flex flex-wrap items-center justify-between gap-2 shrink-0">
               {/* Joint Name & Rename */}
@@ -1826,7 +1856,7 @@ export const LiveTestModule: React.FC<LiveTestModuleProps> = ({
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setShowOscilloscopeModal(true)}
+                  onClick={handleOpenOscilloscope}
                   className="px-3.5 py-1.5 bg-indigo-900/90 hover:bg-indigo-800 text-indigo-200 font-bold text-[11px] rounded-lg shadow-md border border-indigo-500/50 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer font-mono"
                   title="Open Real-Time Optical Waveform Oscilloscope"
                 >
@@ -2844,6 +2874,62 @@ void loop() {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ESP32 NOT CONNECTED ALERT POPUP */}
+      {espNotConnectedAlert.isOpen && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#0f172a] border-2 border-red-500/80 rounded-2xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(239,68,68,0.3)] text-center space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-red-950/80 border-2 border-red-500/80 flex items-center justify-center text-red-400 mx-auto shadow-inner animate-pulse">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-black text-white uppercase tracking-wider font-mono">
+                FIRST CONNECT ESP32
+              </h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed font-mono">
+                {espNotConnectedAlert.feature === 'OSCILLOSCOPE' 
+                  ? 'Live oscilloscope waveform requires an active ESP32 connection. Please connect your ESP32 hardware via USB COM port first.'
+                  : 'Sensor reading capture requires an active ESP32 connection. Please connect your ESP32 hardware via USB COM port first.'}
+              </p>
+            </div>
+
+            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-left space-y-1.5">
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Target Action:</span>
+                <span className="text-amber-400 font-bold uppercase">{espNotConnectedAlert.feature}</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>COM Port Status:</span>
+                <span className="text-red-400 font-bold">DISCONNECTED</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Requirement:</span>
+                <span className="text-cyan-400 font-bold">ESP32 Hardware Verified</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setEspNotConnectedAlert({ isOpen: false, feature: 'CAPTURE' })}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-lg text-xs font-mono transition-colors"
+              >
+                DISMISS
+              </button>
+              <button
+                onClick={() => {
+                  setEspNotConnectedAlert({ isOpen: false, feature: 'CAPTURE' });
+                  setShowHardwareModal(true);
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-lg text-xs font-mono shadow-lg flex items-center gap-1.5 transition-all"
+              >
+                <Usb className="w-4 h-4 text-white" />
+                <span>CONNECT ESP32</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

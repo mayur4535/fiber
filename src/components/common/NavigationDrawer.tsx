@@ -13,15 +13,18 @@ import {
   ChevronDown,
   Compass,
   Check,
-  Clock
+  Clock,
+  Radio,
+  Zap
 } from 'lucide-react';
 import { localDB } from '../../services/db';
 
 export type ActiveModule = 
   | 'dashboard'
+  | 'liveintensity'
+  | 'livetest'
   | 'models'
   | 'reference'
-  | 'livetest'
   | 'pending'
   | 'diagnosis'
   | 'history'
@@ -57,6 +60,7 @@ export const NavigationDrawer: React.FC<NavigationDrawerProps> = ({
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, desc: 'Control Center' },
+    { id: 'liveintensity', label: 'Live Intensity', icon: Radio, desc: 'Dedicated Real-Time Oscilloscope' },
     { id: 'livetest', label: 'New Test', icon: Activity, desc: 'ESP32 Real-time Capture' },
     { id: 'diagnosis', label: 'Fault Diagnosis', icon: FileText, desc: 'Rule-Based & Google AI Analysis' },
     { id: 'pending', label: 'Pending Tests', icon: Clock, desc: 'Resume Interrupted Sessions', badge: pendingCount > 0 ? `${pendingCount} PENDING` : undefined },
